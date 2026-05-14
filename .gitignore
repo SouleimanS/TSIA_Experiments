@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.ipynb_checkpoints/
+
+# Training outputs / logs (regenerable, often huge)
+*.jsonl
+*_log.jsonl
+predictions_*.csv
+checkpoints/
+runs/
+wandb/
+
+# Model weights and large binaries
+*.pth
+*.pt
+*.bin
+*.safetensors
+*.ckpt
+
+# Data
+*.mp4
+*.wav
+*.mp3
+*.npy
+*.npz
+
+# IDE / env
+.vscode/
+.idea/
+.env
+.envrc
+
+# OS junk
+.DS_Store
+Thumbs.db
