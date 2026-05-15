@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Logs & runtime
+*.log
+*.log.attempt*
+*.pid
+*.jsonl
+
+# AVHBench heavy artifacts
+datasets/AVHBench/AVHBench-Align-FT/bert-base-uncased/
+datasets/AVHBench/AVHBench-Align-FT/models/
+datasets/AVHBench/AVHBench-Align-FT/instruction-dataset/
+datasets/AVHBench/AVHBench-Align-FT/predictions_*.csv
+datasets/AVHBench/data/AVHBench_v0/
+
+# AVQA videos (not tracked anyway, but explicit)
+datasets/AVQA/videos/
+datasets/AVQA/AVQA/
+
+# OS / secrets
+.DS_Store
+.env
