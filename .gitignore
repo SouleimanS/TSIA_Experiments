@@ -38,3 +38,54 @@ wandb/
 # OS junk
 .DS_Store
 Thumbs.db
+
+# AVHBench heavy artifacts (not tracked)
+avhbench/AVHBench-Align-FT/bert-base-uncased/
+avhbench/AVHBench-Align-FT/models/
+avhbench/AVHBench-Align-FT/instruction-dataset/
+avhbench/AVHBench-Align-FT/predictions_*.csv
+avhbench/data/AVHBench_v0/
+avhbench/**/*.log
+avhbench/**/*.log.attempt*
+avhbench/**/*.pid
+avhbench/**/*.jsonl
+
+# AVHBench heavy artifacts (not tracked)
+avhbench/AVHBench-Align-FT/bert-base-uncased/
+avhbench/AVHBench-Align-FT/models/
+avhbench/AVHBench-Align-FT/instruction-dataset/
+avhbench/AVHBench-Align-FT/predictions_*.csv
+avhbench/data/AVHBench_v0/
+avhbench/**/*.log
+avhbench/**/*.log.attempt*
+avhbench/**/*.pid
+avhbench/**/*.jsonl
+
+# AVHBench heavy artifacts (not tracked)
+avhbench/AVHBench-Align-FT/bert-base-uncased/
+avhbench/AVHBench-Align-FT/models/
+avhbench/AVHBench-Align-FT/instruction-dataset/
+avhbench/AVHBench-Align-FT/predictions_*.csv
+avhbench/data/AVHBench_v0/
+avhbench/**/*.log
+avhbench/**/*.log.attempt*
+avhbench/**/*.pid
+avhbench/**/*.jsonl
+
+# AVHBench heavy artifacts (never tracked)
+avhbench/AVHBench-Align-FT/bert-base-uncased/
+avhbench/AVHBench-Align-FT/models/
+avhbench/AVHBench-Align-FT/instruction-dataset/
+avhbench/AVHBench-Align-FT/predictions_*.csv
+avhbench/data/AVHBench_v0/
+avhbench/**/videos/
+avhbench/**/*.mp4
+avhbench/**/*.wav
+avhbench/**/*.pth
+avhbench/**/*.bin
+avhbench/**/*.safetensors
+avhbench/**/*.log
+avhbench/**/*.log.attempt*
+avhbench/**/*.pid
+avhbench/**/*.jsonl
+avhbench/**/__pycache__/
