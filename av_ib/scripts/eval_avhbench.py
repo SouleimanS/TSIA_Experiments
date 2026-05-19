@@ -99,14 +99,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--variant", required=True, choices=["v1", "v2", "v3"])
     ap.add_argument("--max-items", type=int, default=None)
+    ap.add_argument("--ckpt-dir", type=str, default=None,
+                    help="Override checkpoint dir, e.g. runs/combined_v1_5ep")
+    ap.add_argument("--test-file", type=str, default=None,
+                    help="Override test JSON path (default: AVHBench full qa.json)")
+    ap.add_argument("--out-name", type=str, default=None,
+                    help="Output basename, e.g. combined_v1")
     args = ap.parse_args()
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     device = "cuda"
 
-    with open(AVHBENCH_QA) as f:
+    qa_path = Path(args.test_file) if args.test_file else AVHBENCH_QA
+    print(f"Loading test items from {qa_path}", flush=True)
+    with open(qa_path) as f:
         all_items = json.load(f)
-    items = [d for d in all_items if d["task"] in JUDGMENT_TASKS]
+    items = [d for d in all_items if d["task"] in JUDGMENT_TASKS and d.get("label") in ("Yes", "No")]
+
     print(f"Loaded {len(items)} yes/no items (filtered from {len(all_items)} total)", flush=True)
     if args.max_items:
         items = items[: args.max_items]
@@ -119,7 +128,10 @@ def main():
 
     print(f"\nBuilding model: {args.variant}", flush=True)
     model = build_model(args.variant, device)
-    ckpt = Path(f"runs/avqa_{args.variant}_3ep/best.pt")
+    if args.ckpt_dir:
+        ckpt = Path(args.ckpt_dir) / "best.pt"
+    else:
+        ckpt = Path(f"runs/avqa_{args.variant}_3ep/best.pt")
     load_checkpoint(model, ckpt, device)
     model.eval()
     s = model.trainable_summary()
@@ -185,12 +197,13 @@ def main():
           f"P={m['precision']:.4f}  R={m['recall']:.4f}  F1={m['f1']:.4f}  "
           f"Yes%={m['yes_pct']:.1f}")
 
-    out_json = RESULTS_DIR / f"avhbench_{args.variant}.json"
+    out_basename = args.out_name if args.out_name else args.variant
+    out_json = RESULTS_DIR / f"avhbench_{out_basename}.json"
     with open(out_json, "w") as f:
         json.dump(results, f, indent=2)
     print(f"\nSaved metrics to {out_json}", flush=True)
 
-    out_csv = RESULTS_DIR / f"avhbench_{args.variant}.csv"
+    out_csv = RESULTS_DIR / f"avhbench_{out_basename}.csv"
     with open(out_csv, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["video_id", "task", "text", "label", "pred", "raw"])
         w.writeheader()
