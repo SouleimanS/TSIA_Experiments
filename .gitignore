@@ -89,3 +89,10 @@ avhbench/**/*.log.attempt*
 avhbench/**/*.pid
 avhbench/**/*.jsonl
 avhbench/**/__pycache__/
+
+# AV-IB project-specific
+av_ib/*.qsub.log
+av_ib/bad_videos.txt
+av_ib/bad_videos_scan.log
+av_ib/results/*.csv
+av_ib/data/combined_train.json
