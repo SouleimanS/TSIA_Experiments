@@ -58,17 +58,33 @@ class _CrossAttnBlock(nn.Module):
 class MutualCrossAttention(nn.Module):
     """v2 fusion: each modality cross-attends to the other.
 
-    Two independent cross-attention blocks running in parallel:
-        video' = block_v(video, audio)
-        audio' = block_a(audio, video)
+    With n_blocks=1 (default): one cross-attention block per direction,
+    both run in parallel using the ORIGINAL counterpart as KV. This is
+    the original v2 behavior, kept for backward compatibility.
+
+    With n_blocks>1: stacks of independent blocks per direction. Each
+    pair of blocks shares the parallel-update pattern: at layer i,
+    video_{i+1} = block_v_i(video_i, audio_i), audio_{i+1} = block_a_i(audio_i, video_i).
+    So the two streams update in lockstep, each layer seeing the
+    other modality at the same depth.
     """
 
-    def __init__(self, d_model: int = 4096, n_heads: int = 8, ffn_mult: int = 1):
+    def __init__(self, d_model: int = 4096, n_heads: int = 8, ffn_mult: int = 1, n_blocks: int = 1):
         super().__init__()
-        self.block_v = _CrossAttnBlock(d_model, n_heads, ffn_mult)
-        self.block_a = _CrossAttnBlock(d_model, n_heads, ffn_mult)
+        if n_blocks < 1:
+            raise ValueError(f"n_blocks must be >= 1, got {n_blocks}")
+        self.n_blocks = n_blocks
+        self.blocks_v = nn.ModuleList([
+            _CrossAttnBlock(d_model, n_heads, ffn_mult) for _ in range(n_blocks)
+        ])
+        self.blocks_a = nn.ModuleList([
+            _CrossAttnBlock(d_model, n_heads, ffn_mult) for _ in range(n_blocks)
+        ])
 
     def forward(self, video_tokens: Tensor, audio_tokens: Tensor):
-        new_video = self.block_v(video_tokens, audio_tokens)
-        new_audio = self.block_a(audio_tokens, video_tokens)
-        return new_video, new_audio
+        v, a = video_tokens, audio_tokens
+        for block_v, block_a in zip(self.blocks_v, self.blocks_a):
+            new_v = block_v(v, a)
+            new_a = block_a(a, v)
+            v, a = new_v, new_a
+        return v, a

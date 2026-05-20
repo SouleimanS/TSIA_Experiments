@@ -96,3 +96,6 @@ av_ib/bad_videos.txt
 av_ib/bad_videos_scan.log
 av_ib/results/*.csv
 av_ib/data/combined_train.json
+
+# Scratch backups from in-place editing
+*.bak

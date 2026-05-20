@@ -29,7 +29,7 @@ HOME = Path.home()
 ANN_TRAIN = HOME / "SOULEIMAN_repo" / "datasets" / "AVQA" / "AVQA" / "AVQA_dataset" / "avhbench_train.json"
 ANN_VAL   = HOME / "SOULEIMAN_repo" / "datasets" / "AVQA" / "AVQA" / "AVQA_dataset" / "avhbench_val.json"
 VID_ROOT  = HOME / "SOULEIMAN_repo" / "datasets" / "AVQA" / "videos" / "Train"
-OUT_DIR   = Path("runs/avqa_v3_3ep")
+# OUT_DIR and BETA are now CLI args (see main())
 
 BATCH_SIZE = 8
 LR = 1e-4
@@ -39,7 +39,6 @@ NUM_EPOCHS = 3
 EVAL_EVERY = 300
 NUM_WORKERS = 4
 DEVICE = "cuda"
-BETA = 1e-3   # KL weight
 
 
 def trainable_params(model):
@@ -96,6 +95,17 @@ def full_val_eval(model, val_records, video_root, device, step):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--beta", type=float, required=True, help="KL weight for VIB")
+    ap.add_argument("--output-dir", type=str, required=True, help="runs/<name>/")
+    ap.add_argument("--smoke-steps", type=int, default=None,
+                    help="If set, run only N training steps then exit (no eval).")
+    args = ap.parse_args()
+    BETA = args.beta
+    OUT_DIR = Path(args.output_dir)
+    SMOKE_STEPS = args.smoke_steps
+    print(f"=== Config: beta={BETA}, output_dir={OUT_DIR}, smoke_steps={SMOKE_STEPS} ===", flush=True)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     with open(ANN_VAL) as f:
@@ -186,6 +196,11 @@ def main():
                     print(f"  saved best.pt (acc={best_acc:.4f})\n", flush=True)
 
             global_step += 1
+            if SMOKE_STEPS is not None and global_step >= SMOKE_STEPS:
+                print(f"\n=== SMOKE OK: {SMOKE_STEPS} steps completed for beta={BETA} ===", flush=True)
+                train_log.close()
+                eval_log.close()
+                return
 
     torch.save(
         {n: p.detach().cpu() for n, p in model.named_parameters() if p.requires_grad},

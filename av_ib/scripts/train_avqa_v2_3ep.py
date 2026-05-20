@@ -26,7 +26,7 @@ HOME = Path.home()
 ANN_TRAIN = HOME / "SOULEIMAN_repo" / "datasets" / "AVQA" / "AVQA" / "AVQA_dataset" / "avhbench_train.json"
 ANN_VAL   = HOME / "SOULEIMAN_repo" / "datasets" / "AVQA" / "AVQA" / "AVQA_dataset" / "avhbench_val.json"
 VID_ROOT  = HOME / "SOULEIMAN_repo" / "datasets" / "AVQA" / "videos" / "Train"
-OUT_DIR   = Path("runs/avqa_v2_3ep")
+# OUT_DIR is now a CLI arg
 
 BATCH_SIZE = 8
 LR = 1e-4
@@ -92,6 +92,17 @@ def full_val_eval(model, val_records, video_root, device, step):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--n-blocks", type=int, default=1, help="Cross-attention block depth")
+    ap.add_argument("--output-dir", type=str, required=True, help="runs/<name>/")
+    ap.add_argument("--smoke-steps", type=int, default=None,
+                    help="If set, run only N training steps then exit (no eval).")
+    args = ap.parse_args()
+    N_BLOCKS = args.n_blocks
+    OUT_DIR = Path(args.output_dir)
+    SMOKE_STEPS = args.smoke_steps
+    print(f"=== Config: n_blocks={N_BLOCKS}, output_dir={OUT_DIR}, smoke_steps={SMOKE_STEPS} ===", flush=True)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     with open(ANN_VAL) as f:
@@ -99,7 +110,7 @@ def main():
     print(f"Val records: {len(val_records)}", flush=True)
 
     print("=== Building AVModelV2 (fusion only) ===", flush=True)
-    model = AVModelV2(use_lora=True).to(DEVICE)
+    model = AVModelV2(use_lora=True, fusion_n_blocks=N_BLOCKS).to(DEVICE)
     s = model.trainable_summary()
     print(f"  Trainable: {s['__total_trainable__']:,}", flush=True)
     print(f"  Fusion adds: {s.get('fusion', 0):,} params", flush=True)
@@ -178,6 +189,11 @@ def main():
                     print(f"  saved best.pt (acc={best_acc:.4f})\n", flush=True)
 
             global_step += 1
+            if SMOKE_STEPS is not None and global_step >= SMOKE_STEPS:
+                print(f"\n=== SMOKE OK: {SMOKE_STEPS} steps completed for n_blocks={N_BLOCKS} ===", flush=True)
+                train_log.close()
+                eval_log.close()
+                return
 
     torch.save(
         {n: p.detach().cpu() for n, p in model.named_parameters() if p.requires_grad},

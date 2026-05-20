@@ -37,6 +37,7 @@ class AVModelV2(nn.Module):
         num_audio_clips: int = 8,
         fusion_heads: int = 8,
         fusion_ffn_mult: int = 1,
+        fusion_n_blocks: int = 1,
     ):
         super().__init__()
 
@@ -61,6 +62,7 @@ class AVModelV2(nn.Module):
             d_model=LLMWrapper.HIDDEN_SIZE,
             n_heads=fusion_heads,
             ffn_mult=fusion_ffn_mult,
+            n_blocks=fusion_n_blocks,
         )
 
         # LLM (same as v1)
