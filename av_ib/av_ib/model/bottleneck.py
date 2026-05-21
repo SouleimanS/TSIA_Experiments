@@ -57,6 +57,10 @@ class VIB(nn.Module):
     def forward(self, av_tokens: Tensor) -> Tuple[Tensor, Tensor]:
         mu = self.fc_mu(av_tokens)
         logvar = self.fc_logvar(av_tokens)
+        # Stability clamp: prevents exp(logvar) overflow when the VIB is stacked
+        # (e.g. in C-MIB where the joint VIB sees stochastic samples as input).
+        # Range [-10, 10] gives exp(logvar) in [4.5e-5, 22026], plenty wide.
+        logvar = logvar.clamp(min=-10.0, max=10.0)
         if self.training:
             std = torch.exp(0.5 * logvar)
             eps = torch.randn_like(std)
