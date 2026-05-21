@@ -99,3 +99,7 @@ av_ib/data/combined_train.json
 
 # Scratch backups from in-place editing
 *.bak
+
+# Un-ignore the experimental snapshot logs (committed to preserve results)
+!av_ib/results/logs_snapshot_*/
+!av_ib/results/logs_snapshot_*/**/*.jsonl
