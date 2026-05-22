@@ -1,0 +1,1 @@
+{"step": 999, "accuracy": 0.588, "n_correct": 294, "n_total": 500, "n_failed": 0, "n_missing_video": 0, "non_match": 0, "eval_time_s": 216.9505558013916, "per_modality": {"Audio": {"n": 11, "n_correct": 7, "acc": 0.6363636363636364}, "Audio-Visual": {"n": 460, "n_correct": 270, "acc": 0.5869565217391305}, "Visual": {"n": 29, "n_correct": 17, "acc": 0.5862068965517241}}}

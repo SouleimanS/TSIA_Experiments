@@ -1,0 +1,167 @@
+[
+  {
+    "name": "musicavqa_v1_3ep",
+    "best_step": 9999,
+    "best_acc": 0.7,
+    "audio": 1.0,
+    "audio_visual": 0.6826086956521739,
+    "visual": 0.8620689655172413,
+    "final_step": 11969,
+    "final_acc": 0.6633099824868651,
+    "final_loss": 0.2806992530822754
+  },
+  {
+    "name": "musicavqa_v1_noisy_gauss_s0.1",
+    "best_step": 10999,
+    "best_acc": 0.686,
+    "audio": 1.0,
+    "audio_visual": 0.6695652173913044,
+    "visual": 0.8275862068965517,
+    "final_step": 11969,
+    "final_acc": 0.6624343257443083,
+    "final_loss": 0.47146570682525635
+  },
+  {
+    "name": "musicavqa_v1_noisy_gauss_s0.5",
+    "best_step": 5999,
+    "best_acc": 0.668,
+    "audio": 0.9090909090909091,
+    "audio_visual": 0.6565217391304348,
+    "visual": 0.7586206896551724,
+    "final_step": 11969,
+    "final_acc": 0.612521891418564,
+    "final_loss": 0.4436151683330536
+  },
+  {
+    "name": "musicavqa_v1_noisy_mix_s0.1",
+    "best_step": 9999,
+    "best_acc": 0.706,
+    "audio": 0.9090909090909091,
+    "audio_visual": 0.6956521739130435,
+    "visual": 0.7931034482758621,
+    "final_step": 11969,
+    "final_acc": 0.6683450087565674,
+    "final_loss": 0.2234303504228592
+  },
+  {
+    "name": "musicavqa_v1_noisy_mix_s0.5",
+    "best_step": 10999,
+    "best_acc": 0.64,
+    "audio": 0.6363636363636364,
+    "audio_visual": 0.6347826086956522,
+    "visual": 0.7241379310344828,
+    "final_step": 11969,
+    "final_acc": 0.582968476357268,
+    "final_loss": 0.45183610916137695
+  },
+  {
+    "name": "musicavqa_v2_3ep_nb1",
+    "best_step": 8999,
+    "best_acc": 0.668,
+    "audio": 1.0,
+    "audio_visual": 0.6565217391304348,
+    "visual": 0.7241379310344828,
+    "final_step": 11969,
+    "final_acc": 0.4763572679509632,
+    "final_loss": 0.8408963084220886
+  },
+  {
+    "name": "musicavqa_v3_noisy_gauss_s0.1",
+    "best_step": 7999,
+    "best_acc": 0.672,
+    "audio": 0.9090909090909091,
+    "audio_visual": 0.6630434782608695,
+    "visual": 0.7241379310344828,
+    "final_step": 11969,
+    "final_acc": 0.5952276707530648,
+    "final_loss": 0.6514663100242615
+  },
+  {
+    "name": "musicavqa_v3_noisy_gauss_s0.5",
+    "best_step": 5999,
+    "best_acc": 0.632,
+    "audio": 0.8181818181818182,
+    "audio_visual": 0.6282608695652174,
+    "visual": 0.6206896551724138,
+    "final_step": 11969,
+    "final_acc": 0.5816549912434326,
+    "final_loss": 0.3113865554332733
+  },
+  {
+    "name": "musicavqa_v3_noisy_mix_s0.1",
+    "best_step": 8999,
+    "best_acc": 0.67,
+    "audio": 0.8181818181818182,
+    "audio_visual": 0.6630434782608695,
+    "visual": 0.7241379310344828,
+    "final_step": 11969,
+    "final_acc": 0.6503940455341506,
+    "final_loss": 0.1614839732646942
+  },
+  {
+    "name": "musicavqa_v3_noisy_mix_s0.5",
+    "best_step": 10999,
+    "best_acc": 0.606,
+    "audio": 0.7272727272727273,
+    "audio_visual": 0.6021739130434782,
+    "visual": 0.6206896551724138,
+    "final_step": 11969,
+    "final_acc": 0.27626970227670755,
+    "final_loss": 1.9168720245361328
+  },
+  {
+    "name": "musicavqa_v4_3ep_b1e-2",
+    "best_step": 9999,
+    "best_acc": 0.672,
+    "audio": 0.9090909090909091,
+    "audio_visual": 0.658695652173913,
+    "visual": 0.7931034482758621,
+    "final_step": 11969,
+    "final_acc": 0.6190893169877408,
+    "final_loss": 5.678243160247803
+  },
+  {
+    "name": "musicavqa_v4_noisy_gauss_s0.1",
+    "best_step": 8999,
+    "best_acc": 0.69,
+    "audio": 0.9090909090909091,
+    "audio_visual": 0.6782608695652174,
+    "visual": 0.7931034482758621,
+    "final_step": 11969,
+    "final_acc": 0.6425131348511384,
+    "final_loss": 4.621415615081787
+  },
+  {
+    "name": "musicavqa_v4_noisy_gauss_s0.5",
+    "best_step": 9999,
+    "best_acc": 0.67,
+    "audio": 1.0,
+    "audio_visual": 0.6521739130434783,
+    "visual": 0.8275862068965517,
+    "final_step": 11969,
+    "final_acc": 0.6061733800350263,
+    "final_loss": 4.708017826080322
+  },
+  {
+    "name": "musicavqa_v4_noisy_mix_s0.1",
+    "best_step": 9999,
+    "best_acc": 0.68,
+    "audio": 0.8181818181818182,
+    "audio_visual": 0.6760869565217391,
+    "visual": 0.6896551724137931,
+    "final_step": 11969,
+    "final_acc": 0.6320052539404554,
+    "final_loss": 7.149933815002441
+  },
+  {
+    "name": "musicavqa_v4_noisy_mix_s0.5",
+    "best_step": 8999,
+    "best_acc": 0.61,
+    "audio": 0.7272727272727273,
+    "audio_visual": 0.6065217391304348,
+    "visual": 0.6206896551724138,
+    "final_step": 11969,
+    "final_acc": 0.0,
+    "final_loss": NaN
+  }
+]

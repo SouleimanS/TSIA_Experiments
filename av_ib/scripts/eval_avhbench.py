@@ -72,12 +72,18 @@ def build_model(variant: str, device: str):
     if variant == "v1":
         from av_ib.model.av_model_v1 import AVModelV1
         return AVModelV1(use_lora=True).to(device)
-    if variant == "v2":
+    if variant == "v2" or variant == "v2_nb1":
         from av_ib.model.av_model_v2 import AVModelV2
-        return AVModelV2(use_lora=True).to(device)
+        return AVModelV2(use_lora=True, fusion_n_blocks=1).to(device)
+    if variant == "v2_nb2":
+        from av_ib.model.av_model_v2 import AVModelV2
+        return AVModelV2(use_lora=True, fusion_n_blocks=2).to(device)
     if variant == "v3":
         from av_ib.model.av_model_v3 import AVModelV3
         return AVModelV3(use_lora=True).to(device)
+    if variant == "v4":
+        from av_ib.model.av_model_v4 import AVModelV4
+        return AVModelV4(use_lora=True).to(device)
     raise ValueError(f"Unknown variant: {variant}")
 
 
@@ -97,7 +103,7 @@ def load_checkpoint(model, ckpt_path, device):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--variant", required=True, choices=["v1", "v2", "v3"])
+    ap.add_argument("--variant", required=True, choices=["v1", "v2", "v2_nb1", "v2_nb2", "v3", "v4"])
     ap.add_argument("--max-items", type=int, default=None)
     ap.add_argument("--ckpt-dir", type=str, default=None,
                     help="Override checkpoint dir, e.g. runs/combined_v1_5ep")
