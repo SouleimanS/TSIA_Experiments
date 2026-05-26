@@ -1,38 +1,49 @@
-"""Single-GPU training loop for AVModelV1 (and future variants).
+"""Single-GPU training loop for AVModelV5 (Qwen3-Omni + C-MIB).
+
+Replaces the Vicuna-era loop.py. Key differences:
+    - forward_train returns 6 losses (nll, nll_aux_v/a, kl_v/a/j) — composed here
+    - Inputs are file paths (str), not pre-loaded tensors
+    - Losses live on different GPUs (accelerate sharded the 30B model) — moved
+      to common device before composition
+    - Trainable param count is ~710M; checkpoints saved as state dict only
 
 Public API:
-    run_training(model, dataloader, *, num_steps, lr, log_path, ckpt_dir, ...)
+    run_training(model, dataloader, *, num_steps, ...)
 
-What it does:
-    - Builds an AdamW optimizer over model.trainable_parameters_grouped()
-      (we expose this on the model so we can use different LRs for
-       Q-Formers vs LoRA later, but for now one group at one LR).
-    - For each batch: forward_train -> backward -> clip -> step.
-    - Logs to stdout AND a JSONL file (one record per step).
-    - Saves a checkpoint of the trainable state every save_every steps
-      (full model state would be huge, but we only need the 310M trainable
-       params plus the optimizer state).
+Loss composition:
+    loss = nll
+         + beta_v * kl_v + beta_a * kl_a + beta_j * kl_j
+         + aux_weight * (nll_aux_v + nll_aux_a)
 """
 from __future__ import annotations
 
 import json
 import time
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 import torch
-from torch.utils.data import DataLoader
 from torch import nn
 
 
 def trainable_state_dict(model: nn.Module) -> dict:
-    """Return only parameters with requires_grad=True. Saves disk space:
-    ~1.2GB instead of ~36GB for the full model."""
-    return {n: p for n, p in model.named_parameters() if p.requires_grad}
+    """Return only parameters with requires_grad=True. ~710M for v5 vs 30B full."""
+    return {n: p.detach().cpu() for n, p in model.named_parameters() if p.requires_grad}
 
 
 def trainable_params(model: nn.Module):
     return [p for p in model.parameters() if p.requires_grad]
+
+
+def _compose_loss(nll, nll_aux_v, nll_aux_a, kl_v, kl_a, kl_j,
+                  *, beta_v: float, beta_a: float, beta_j: float, aux_weight: float):
+    """Combine 6 losses on potentially-different devices into one scalar on nll's device."""
+    dev = nll.device
+    return (nll
+            + beta_v * kl_v.to(dev)
+            + beta_a * kl_a.to(dev)
+            + beta_j * kl_j.to(dev)
+            + aux_weight * (nll_aux_v.to(dev) + nll_aux_a.to(dev)))
 
 
 def run_training(
@@ -43,22 +54,20 @@ def run_training(
     lr: float = 1e-4,
     weight_decay: float = 0.05,
     grad_clip: float = 1.0,
+    beta_v: float = 0.0,
+    beta_a: float = 0.0,
+    beta_j: float = 0.0,
+    aux_weight: float = 0.1,
     log_path: str | Path = "train_log.jsonl",
-    ckpt_dir: str | Path = "ckpts",
-    save_every: int = 0,                # 0 = don't save
-    device: str = "cuda",
+    ckpt_path: Optional[str | Path] = None,   # if set, save final ckpt here
     print_every: int = 1,
-) -> None:
-    """Train `model` for `num_steps` steps on `dataloader`.
-
-    The dataloader is iterated repeatedly if num_steps > len(dataloader).
-    """
+) -> dict:
+    """Train v5 for num_steps. Returns summary dict."""
     log_path = Path(log_path)
-    ckpt_dir = Path(ckpt_dir)
-    if save_every > 0:
-        ckpt_dir.mkdir(parents=True, exist_ok=True)
+    if ckpt_path is not None:
+        ckpt_path = Path(ckpt_path)
+        ckpt_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # AdamW on trainable params only.
     optimizer = torch.optim.AdamW(
         trainable_params(model),
         lr=lr,
@@ -67,7 +76,6 @@ def run_training(
     )
 
     model.train()
-
     log_f = open(log_path, "w")
 
     def cycle(loader):
@@ -78,15 +86,23 @@ def run_training(
     it = cycle(dataloader)
     step = 0
     t0 = time.time()
+    print(f"Training {num_steps} steps. betas=(v={beta_v}, a={beta_a}, j={beta_j}), aux_w={aux_weight}, lr={lr}")
 
     while step < num_steps:
         batch = next(it)
-        videos = batch["videos"].to(device, non_blocking=True)
-        audio_mels = batch["audio_mels"].to(device, non_blocking=True)
+        # Batch shape: each field is a list of length B (B=1 in our case)
+        videos = batch["videos"]
+        audios = batch["audios"]
         prompts = batch["prompts"]
         answers = batch["answers"]
 
-        loss = model.forward_train(videos, audio_mels, prompts, answers)
+        nll, nll_aux_v, nll_aux_a, kl_v, kl_a, kl_j = model.forward_train(
+            videos, audios, prompts, answers,
+        )
+        loss = _compose_loss(
+            nll, nll_aux_v, nll_aux_a, kl_v, kl_a, kl_j,
+            beta_v=beta_v, beta_a=beta_a, beta_j=beta_j, aux_weight=aux_weight,
+        )
 
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -96,27 +112,37 @@ def run_training(
         rec = {
             "step": step,
             "loss": float(loss.item()),
+            "nll": float(nll.item()),
+            "nll_aux_v": float(nll_aux_v.item()),
+            "nll_aux_a": float(nll_aux_a.item()),
+            "kl_v": float(kl_v.item()),
+            "kl_a": float(kl_a.item()),
+            "kl_j": float(kl_j.item()),
             "grad_norm": float(grad_norm),
             "lr": lr,
             "elapsed_s": time.time() - t0,
         }
         log_f.write(json.dumps(rec) + "\n")
         log_f.flush()
-        if step % print_every == 0:
-            print(f"  step {step:4d}  loss={rec['loss']:.4f}  "
-                  f"grad_norm={rec['grad_norm']:.2f}  "
-                  f"elapsed={rec['elapsed_s']:.1f}s")
 
-        if save_every > 0 and (step + 1) % save_every == 0:
-            ckpt = {
-                "step": step,
-                "trainable_state": trainable_state_dict(model),
-                "optimizer_state": optimizer.state_dict(),
-            }
-            torch.save(ckpt, ckpt_dir / f"step_{step:06d}.pt")
-            print(f"  saved {ckpt_dir / f'step_{step:06d}.pt'}")
+        if step % print_every == 0:
+            print(f"  step {step:4d}  loss={rec['loss']:7.3f}  nll={rec['nll']:6.3f}  "
+                  f"kl=({rec['kl_v']:.0f},{rec['kl_a']:.0f},{rec['kl_j']:.0f})  "
+                  f"gn={rec['grad_norm']:.2f}  t={rec['elapsed_s']:.0f}s",
+                  flush=True)
 
         step += 1
 
     log_f.close()
-    print(f"\nTraining complete: {num_steps} steps in {time.time() - t0:.1f}s")
+    elapsed = time.time() - t0
+    print(f"\nTraining complete: {num_steps} steps in {elapsed:.1f}s ({num_steps/elapsed:.2f} steps/s)")
+
+    if ckpt_path is not None:
+        print(f"Saving final trainable state to {ckpt_path}")
+        torch.save(
+            {"step": num_steps - 1, "trainable_state": trainable_state_dict(model)},
+            ckpt_path,
+        )
+        print("  saved.")
+
+    return {"num_steps": num_steps, "elapsed_s": elapsed, "final_loss": rec["loss"]}

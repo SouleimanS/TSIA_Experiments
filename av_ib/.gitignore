@@ -30,3 +30,13 @@ __pycache__/
 .vscode/
 .idea/
 .env
+
+# Inference/training outputs (regenerable, not source)
+qwen_omni_*.csv
+qwen_omni_*.json
+*.qsub.log
+runs/
+
+# PyTorch caches
+__pycache__/
+*.pyc

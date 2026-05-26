@@ -45,7 +45,18 @@ class VIB(nn.Module):
     KL is averaged over (B, N) so it stays scale-invariant to token count.
     """
 
-    def __init__(self, d_model: int = 4096):
+    def __init__(self, d_model: int = 4096, kl_reduction: str = "mean"):
+        """kl_reduction: how to reduce per-element KL to a scalar.
+            - "mean":         mean over (B, N, D). Scale-invariant to token count.
+                              Effective KL pressure shrinks as N grows (legacy v3/v4 default).
+            - "mean_per_dim": sum over (B, N), mean over D. KL grows with N.
+                              Use this when token count is large/variable (e.g. Qwen3-Omni's
+                              ~2000-token sequences vs the old 40-token Q-Former).
+            - "sum":          full sum. Textbook VIB; requires much smaller beta.
+        """
+        if kl_reduction not in ("mean", "mean_per_dim", "sum"):
+            raise ValueError(f"kl_reduction must be one of mean|mean_per_dim|sum, got {kl_reduction!r}")
+        self.kl_reduction = kl_reduction
         super().__init__()
         self.fc_mu = nn.Linear(d_model, d_model)
         self.fc_logvar = nn.Linear(d_model, d_model)
@@ -69,8 +80,14 @@ class VIB(nn.Module):
             z = mu
         # KL( N(mu, sigma^2) || N(0, I) ) per element = 0.5 * (mu^2 + sigma^2 - logvar - 1)
         kl_per_elem = 0.5 * (mu.pow(2) + logvar.exp() - logvar - 1.0)
-        # Average over all dims (batch, token, channel) for scale invariance.
-        kl = kl_per_elem.mean()
+        # Reduce per-element KL according to self.kl_reduction (see __init__).
+        if self.kl_reduction == "mean":
+            kl = kl_per_elem.mean()
+        elif self.kl_reduction == "mean_per_dim":
+            # Sum over batch + token dims, mean over hidden dim. KL grows with N.
+            kl = kl_per_elem.sum(dim=(0, 1)).mean()
+        else:  # "sum"
+            kl = kl_per_elem.sum()
         return z, kl
 
 
@@ -84,11 +101,11 @@ class PerModalityVIB(nn.Module):
     The split point is fixed at construction. KL is the average of the two.
     """
 
-    def __init__(self, num_video_tokens: int = 32, d_model: int = 4096):
+    def __init__(self, num_video_tokens: int = 32, d_model: int = 4096, kl_reduction: str = "mean"):
         super().__init__()
         self.num_video_tokens = num_video_tokens
-        self.video_vib = VIB(d_model)
-        self.audio_vib = VIB(d_model)
+        self.video_vib = VIB(d_model, kl_reduction=kl_reduction)
+        self.audio_vib = VIB(d_model, kl_reduction=kl_reduction)
 
     def forward(self, av_tokens: Tensor) -> Tuple[Tensor, Tensor]:
         v = av_tokens[:, : self.num_video_tokens]
