@@ -24,3 +24,16 @@ datasets/AVQA/AVQA/
 # OS / secrets
 .DS_Store
 .env
+# Datasets & archives — never commit
+datasets/AVQA/
+datasets/MUSIC-AVQA/
+MUSIC-AVQA-videos-Real.zip
+_archive/
+_archive.tar.gz
+baselines/
+
+# Editor / build cruft
+*.bak
+*.bak[0-9]
+__pycache__/
+*.pyc
