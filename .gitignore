@@ -103,3 +103,7 @@ av_ib/data/combined_train.json
 # Un-ignore the experimental snapshot logs (committed to preserve results)
 !av_ib/results/logs_snapshot_*/
 !av_ib/results/logs_snapshot_*/**/*.jsonl
+av_ib/_archive.tar.gz
+av_ib/_archive/
+**/__pycache__/
+*.pyc

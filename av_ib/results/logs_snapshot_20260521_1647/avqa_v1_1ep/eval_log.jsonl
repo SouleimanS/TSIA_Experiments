@@ -1,7 +1,0 @@
-{"step": 199, "val_subset_n": 200, "val_subset_correct": 100, "val_subset_accuracy": 0.5, "val_subset_failed": 0, "eval_time_s": 48.668806076049805}
-{"step": 399, "val_subset_n": 200, "val_subset_correct": 100, "val_subset_accuracy": 0.5, "val_subset_failed": 0, "eval_time_s": 46.95001482963562}
-{"step": 599, "val_subset_n": 200, "val_subset_correct": 100, "val_subset_accuracy": 0.5, "val_subset_failed": 0, "eval_time_s": 46.81054067611694}
-{"step": 799, "val_subset_n": 200, "val_subset_correct": 125, "val_subset_accuracy": 0.625, "val_subset_failed": 0, "eval_time_s": 48.06885004043579}
-{"step": 999, "val_subset_n": 200, "val_subset_correct": 116, "val_subset_accuracy": 0.58, "val_subset_failed": 0, "eval_time_s": 47.664063930511475}
-{"step": 1199, "val_subset_n": 200, "val_subset_correct": 125, "val_subset_accuracy": 0.625, "val_subset_failed": 0, "eval_time_s": 46.884493827819824}
-{"step": 1375, "val_subset_n": 200, "val_subset_correct": 130, "val_subset_accuracy": 0.65, "val_subset_failed": 0, "eval_time_s": 46.58177208900452}
