@@ -40,3 +40,17 @@ runs/
 # PyTorch caches
 __pycache__/
 *.pyc
+
+# === Results / diagnostics (regeneratable) ===
+graphify-out/
+# === Temp test scripts ===
+test_*.sh
+# === wvs_experiment (separate project, not part of av_ib) ===
+wvs_experiment/
+# === Old/redundant qsub scripts in train root ===
+av_ib/train/qsub_train_musicavqa_1k.sh
+av_ib/train/qsub_train_musicavqa_bis_1k.sh
+av_ib/train/train_musicavqa_qwen3omni.py
+
+
+results/

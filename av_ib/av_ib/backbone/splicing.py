@@ -194,6 +194,23 @@ class CMIBSplicer:
         new_embeds = inputs_embeds.masked_scatter(self._audio_mask, z_a_flat)
         new_embeds = new_embeds.masked_scatter(self._video_mask, z_v_flat)
 
+        import os as _os
+        if _os.environ.get("CMIB_DRIFT_PROBE") == "1":
+            import torch.nn.functional as _F
+            _b = inputs_embeds.detach().float()
+            _a = new_embeds.detach().float()
+            for _name, _mask in (("audio", self._audio_mask), ("video", self._video_mask)):
+                _m = _mask
+                _tok = _m.any(dim=-1) if _m.dim() == 3 else _m
+                _idx = _tok[0].nonzero(as_tuple=True)[0]
+                if _idx.numel() == 0:
+                    print(f"    [probe] {_name}: 0 tokens", flush=True); continue
+                _bb = _b[0, _idx]; _aa = _a[0, _idx]
+                _cos = _F.cosine_similarity(_bb, _aa, dim=-1).mean().item()
+                _rel = ((_aa-_bb).norm(dim=-1)/(_bb.norm(dim=-1)+1e-6)).mean().item()
+                print(f"    [probe] {_name}: n={_idx.numel():4d}  cos={_cos:.3f}  rel_L2={_rel:.3f}", flush=True)
+
+
         new_kwargs = {**kwargs, "inputs_embeds": new_embeds}
         self._clear_per_call_state()
         return args, new_kwargs

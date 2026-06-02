@@ -36,13 +36,22 @@ def trainable_params(model: nn.Module):
 
 
 def _compose_loss(nll, nll_aux_v, nll_aux_a, kl_v, kl_a, kl_j,
-                  *, beta_v: float, beta_a: float, beta_j: float, aux_weight: float):
-    """Combine 6 losses on potentially-different devices into one scalar on nll's device."""
+                  *, beta_v: float, beta_a: float, beta_j: float, aux_weight: float,
+                  model_handles_betas: bool = False):
+    """Combine 6 losses into a scalar on nll's device.
+
+    If model_handles_betas=True (v6 sink-aware), the returned kl_v/kl_a/kl_j
+    are already weighted by betas inside the model; multiply by 1.0 here.
+    Otherwise (v5 and earlier), multiply by the given beta_v/beta_a/beta_j.
+    """
     dev = nll.device
+    mul_v = 1.0 if model_handles_betas else beta_v
+    mul_a = 1.0 if model_handles_betas else beta_a
+    mul_j = 1.0 if model_handles_betas else beta_j
     return (nll
-            + beta_v * kl_v.to(dev)
-            + beta_a * kl_a.to(dev)
-            + beta_j * kl_j.to(dev)
+            + mul_v * kl_v.to(dev)
+            + mul_a * kl_a.to(dev)
+            + mul_j * kl_j.to(dev)
             + aux_weight * (nll_aux_v.to(dev) + nll_aux_a.to(dev)))
 
 
@@ -61,6 +70,8 @@ def run_training(
     log_path: str | Path = "train_log.jsonl",
     ckpt_path: Optional[str | Path] = None,   # if set, save final ckpt here
     print_every: int = 1,
+    save_every: int = 0,   # if >0, save step_N.pt every N steps
+    model_handles_betas: bool = False,
 ) -> dict:
     """Train v5 for num_steps. Returns summary dict."""
     log_path = Path(log_path)
@@ -102,6 +113,7 @@ def run_training(
         loss = _compose_loss(
             nll, nll_aux_v, nll_aux_a, kl_v, kl_a, kl_j,
             beta_v=beta_v, beta_a=beta_a, beta_j=beta_j, aux_weight=aux_weight,
+            model_handles_betas=model_handles_betas,
         )
 
         optimizer.zero_grad(set_to_none=True)
@@ -130,6 +142,15 @@ def run_training(
                   f"kl=({rec['kl_v']:.0f},{rec['kl_a']:.0f},{rec['kl_j']:.0f})  "
                   f"gn={rec['grad_norm']:.2f}  t={rec['elapsed_s']:.0f}s",
                   flush=True)
+
+        # Periodic checkpoint (every save_every steps, if save_every > 0)
+        if save_every > 0 and ckpt_path is not None and (step + 1) % save_every == 0:
+            periodic_path = ckpt_path.parent / f"step_{step+1}.pt"
+            torch.save(
+                {"step": step, "trainable_state": trainable_state_dict(model)},
+                periodic_path,
+            )
+            print(f"  [ckpt] saved {periodic_path.name}", flush=True)
 
         step += 1
 

@@ -18,41 +18,8 @@ import torch
 
 from av_ib.data.musicavqa import render_question, parse_type
 
-# Inlined from musicavqa_eval to avoid pulling in AVHBench's video_llama import chain
-# (which is broken under transformers>=5.x). The functions themselves are pure-Python.
-import re
-ANSWER_VOCAB = {
-    "yes", "no", "two", "one", "zero", "three", "four", "five", "six", "seven", "eight", "nine",
-    "ten", "more than ten",
-    "left", "right", "middle",
-    "indoor", "outdoor",
-    "simultaneously",
-    "violin", "cello", "piano", "flute", "guitar", "acoustic_guitar", "electric_bass",
-    "clarinet", "saxophone", "accordion", "trumpet", "tuba", "trombone", "horn", "ukulele",
-    "banjo", "pipa", "guzheng", "erhu", "suona", "xylophone",
-}
-
-
-DIGIT_TO_WORD = {
-    "0": "zero", "1": "one", "2": "two", "3": "three", "4": "four",
-    "5": "five", "6": "six", "7": "seven", "8": "eight", "9": "nine",
-    "10": "ten",
-}
-
-
-def parse_answer(text: str, vocab: set = ANSWER_VOCAB) -> str:
-    head = text.strip().lower()
-    head = re.sub(r"[.,!?;:\"'()]", " ", head)
-    # Normalize standalone digits to spelled-out words BEFORE vocab matching
-    head = re.sub(r"\b(\d+)\b", lambda m: DIGIT_TO_WORD.get(m.group(1), m.group(1)), head)
-    for tok in sorted(vocab, key=lambda s: -len(s)):
-        candidates = [tok]
-        if "_" in tok:
-            candidates.append(tok.replace("_", " "))
-        for c in candidates:
-            if re.search(r"\b" + re.escape(c) + r"\b", head):
-                return tok
-    return "??"
+# Shared parser with location-noun normalization
+from av_ib.eval.answer_parser import parse_answer, ANSWER_VOCAB
 
 
 SYSTEM_PROMPT = (
