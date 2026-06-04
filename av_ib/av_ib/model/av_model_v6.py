@@ -35,6 +35,15 @@ from av_ib.model.fusion import MutualCrossAttention, SinkSymmetricFusion
 
 # Sink classification constants (from Phase A validation)
 DSINK_DIMS = [985, 1992]
+
+ANSWER_VOCAB_LIST = [
+    "yes","no","zero","one","two","three","four","five","six","seven","eight","nine","ten",
+    "left","right","middle","indoor","outdoor","simultaneously",
+    "violin","cello","piano","flute","guitar","clarinet","saxophone","accordion",
+    "trumpet","tuba","trombone","horn","ukulele","banjo","pipa","guzheng","erhu","suona","xylophone",
+    "drum","congas","bassoon","bagpipe",
+]
+
 SINK_TAU = 18.0
 BETA_SINK_RATIO = 0.01   # sink KL weight relative to non-sink
 
@@ -205,15 +214,21 @@ class AVModelV6(nn.Module):
         variant: str = "a",
         video_vib: str = "sink",
         audio_vib: str = "standard",
+        adaptive_beta: bool = False,
+        adaptive_beta_base: float = 0.1,
         fusion_type: str = "mutual",
     ):
         super().__init__()
-        assert variant in ("a", "b", "b_bis", "b_bis_2", "c"), f"variant must be a/b/b_bis/b_bis_2/c, got {variant!r}"
+        assert variant in ("a", "b", "b_bis", "b_bis_2", "b_bis_3", "b_bis_4", "c"), f"variant must be a/b/b_bis/b_bis_2/b_bis_3/b_bis_4/c, got {variant!r}"
+        if variant in ("b_bis_3", "b_bis_4"):
+            adaptive_beta = True
         assert video_vib in ("sink", "standard"), f"video_vib must be sink/standard, got {video_vib!r}"
         assert fusion_type in ("mutual", "sink_sym", "none"), f"fusion_type must be mutual/sink_sym/none, got {fusion_type!r}"
         self.variant = variant
         self.video_vib = video_vib
         self.audio_vib = audio_vib
+        self.adaptive_beta = adaptive_beta
+        self.adaptive_beta_base = adaptive_beta_base
         self.fusion_type = fusion_type
 
         self.qwen = QwenOmniWrapper(
@@ -269,7 +284,7 @@ class AVModelV6(nn.Module):
                 tau=sink_tau,
                 beta_sink_ratio=beta_sink_ratio,
             )
-        elif variant in ("b", "b_bis", "b_bis_2"):
+        elif variant in ("b", "b_bis", "b_bis_2", "b_bis_3", "b_bis_4"):
             self.bottleneck_joint = None
         else:  # variant == "c"
             self.bottleneck_joint = VIB(d_model=self.D_MODEL, kl_reduction=kl_reduction)
@@ -277,6 +292,40 @@ class AVModelV6(nn.Module):
         self.vocab_size = self.qwen.tokenizer.vocab_size
         self.aux_head_v = nn.Linear(self.D_MODEL, self.vocab_size, bias=False)
         self.aux_head_a = nn.Linear(self.D_MODEL, self.vocab_size, bias=False)
+        # AdaVIB: cache first-token ids for the answer vocab
+        if self.adaptive_beta:
+            tok = self.qwen.tokenizer
+            ids = []
+            for w in ANSWER_VOCAB_LIST:
+                t = tok(w, add_special_tokens=False, return_tensors="pt").input_ids
+                if t.numel():
+                    ids.append(int(t[0, 0].item()))
+            self.register_buffer("_ans_vocab_ids",
+                                 torch.tensor(sorted(set(ids)), dtype=torch.long))
+        else:
+            self._ans_vocab_ids = None
+
+
+
+    def _adaptive_beta_from(self, z_pool: Tensor) -> Tensor:
+        """AdaVIB-style: compute per-sample beta from entropy of z_pool aligned to answer vocab.
+        z_pool: (B, D)
+        Returns: (B,) scalar betas with a floor to prevent collapse to 0.
+        """
+        # Get the LLM input embedding (D = hidden_size)
+        embed = self.qwen.thinker_text_model.get_input_embeddings().weight  # (V, D)
+        E_ans = embed[self._ans_vocab_ids.to(embed.device)]                 # (V_ans, D)
+        z_pool = z_pool.to(embed.device).to(embed.dtype)
+        logits = z_pool @ E_ans.T                                           # (B, V_ans)
+        probs  = torch.softmax(logits, dim=-1)
+        H = -(probs * torch.log(probs + 1e-9)).sum(dim=-1)                  # (B,)
+        H_max = float(torch.log(torch.tensor(float(len(self._ans_vocab_ids)))))
+        H_norm = (H / H_max).clamp(min=1e-4, max=0.999)
+        beta = -self.adaptive_beta_base * torch.log(H_norm)                 # (B,)
+        # Floor: never drop below beta_min so KL always contributes
+        beta_min = 1e-3
+        beta = torch.clamp(beta, min=beta_min)
+        return beta
 
     def _make_provider(self):
         """Provider that records sink masks and KLs for inspection."""
@@ -307,6 +356,17 @@ class AVModelV6(nn.Module):
 
             # === VIB_a: standard ===
             _a_out = self.bottleneck_a(audio_out); z_a, kl_a = _a_out[0], _a_out[1]
+            # === AdaVIB: per-sample adaptive beta scaling ===
+            if self.adaptive_beta:
+                z_v_pool = z_v.mean(dim=1)                                   # (B, D)
+                z_a_pool = z_a.mean(dim=1)
+                beta_v_adapt = self._adaptive_beta_from(z_v_pool).mean()    # scalar
+                beta_a_adapt = self._adaptive_beta_from(z_a_pool).mean()
+                kl_v = kl_v * beta_v_adapt
+                kl_a = kl_a * beta_a_adapt
+                # Stash for logging
+                kls["beta_v_adapt"] = beta_v_adapt.detach()
+                kls["beta_a_adapt"] = beta_a_adapt.detach()
 
             # === Fusion ===
             if self.fusion is not None:
@@ -319,7 +379,7 @@ class AVModelV6(nn.Module):
             if self.variant == "a":
                 z_joint, kl_j, mask_j = self.bottleneck_joint(av)
                 masks["sink_j"] = mask_j
-            elif self.variant in ("b", "b_bis", "b_bis_2"):
+            elif self.variant in ("b", "b_bis", "b_bis_2", "b_bis_3", "b_bis_4"):
                 z_joint = av                                       # no bottleneck
                 kl_j = torch.zeros((), device=av.device, dtype=av.dtype)
                 masks["sink_j"] = None

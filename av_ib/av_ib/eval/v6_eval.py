@@ -37,7 +37,7 @@ def main(args):
 
     print("\n[1/4] Constructing AVModelV6...")
     from av_ib.model.av_model_v6 import AVModelV6
-    model = AVModelV6(use_lora=True, variant=args.variant, video_vib=args.video_vib, fusion_type=args.fusion)
+    model = AVModelV6(use_lora=(not args.no_lora), variant=args.variant, video_vib=args.video_vib, audio_vib=args.audio_vib, fusion_type=args.fusion)
     model.eval()
 
     print("\n[2/4] Loading trained checkpoint...")
@@ -139,11 +139,13 @@ if __name__ == "__main__":
     p.add_argument("--num-records", type=int, default=50)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out-csv", default="v5_eval.csv")
-    p.add_argument("--variant", choices=("a", "b", "c"), default="a",
+    p.add_argument("--no-lora", action="store_true", default=False, help="Disable LoRA on the LLM (full frozen)")
+    p.add_argument("--variant", choices=("a", "b", "b_bis", "b_bis_2", "b_bis_3", "b_bis_4", "c"), default="b",
                    help="v6 architecture variant (must match training checkpoint)")
     p.add_argument("--video-vib", choices=("sink", "standard"), default="sink",
                    help="video bottleneck type (must match training checkpoint)")
-    p.add_argument("--fusion", choices=("mutual", "sink_sym"), default="mutual",
+    p.add_argument("--audio-vib", choices=("standard", "norm_topk"), default="standard")
+    p.add_argument("--fusion", choices=("mutual", "sink_sym", "none"), default="mutual",
                    help="fusion module (must match training checkpoint)")
     args = p.parse_args()
     sys.exit(main(args))

@@ -75,7 +75,7 @@ def main(args):
 
     print("\n[1/3] Constructing AVModelV6...")
     from av_ib.model.av_model_v6 import AVModelV6
-    model = AVModelV6(use_lora=True, variant=args.variant, video_vib=args.video_vib, audio_vib=args.audio_vib, fusion_type=args.fusion)
+    model = AVModelV6(use_lora=(not args.no_lora), variant=args.variant, video_vib=args.video_vib, audio_vib=args.audio_vib, fusion_type=args.fusion)
 
     print("\n[2/3] Building dataset...")
     dataset = MusicAVQAPathDataset(args.ann_path, args.video_root)
@@ -120,7 +120,8 @@ if __name__ == "__main__":
     p.add_argument("--log-path", default="train_log.jsonl")
     p.add_argument("--ckpt-path", default=None)
     p.add_argument("--print-every", type=int, default=1)
-    p.add_argument("--variant", choices=("a", "b", "b_bis", "b_bis_2", "c"), default="a",
+    p.add_argument("--no-lora", action="store_true", default=False, help="Disable LoRA on the LLM (full frozen)")
+    p.add_argument("--variant", choices=("a", "b", "b_bis", "b_bis_2", "b_bis_3", "b_bis_4", "c"), default="a",
                    help="v6 architecture variant: a=3VIB-sink-everywhere, b=2VIB-no-joint, c=3VIB-sink-on-v-only")
     p.add_argument("--video-vib", choices=("sink", "standard"), default="sink",
                    help="video bottleneck type: sink=SinkAwareVIB, standard=plain VIB (isolation ablation)")
