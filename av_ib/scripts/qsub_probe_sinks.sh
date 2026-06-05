@@ -9,6 +9,13 @@
 
 set -euo pipefail
 cd "$PBS_O_WORKDIR"
+
+# Write output to a fixed path so it's readable from any login node,
+# independent of PBS log routing between login1/login2.
+OUTFILE="$PBS_O_WORKDIR/runs/probe_sinks_out.txt"
+mkdir -p "$PBS_O_WORKDIR/runs"
+exec > >(tee -a "$OUTFILE") 2>&1
+
 echo "=== Node: $(hostname)  Date: $(date) ==="
 nvidia-smi -L
 

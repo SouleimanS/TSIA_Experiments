@@ -9,6 +9,10 @@
 
 set -euo pipefail
 cd "$PBS_O_WORKDIR"
+
+OUTFILE="$PBS_O_WORKDIR/runs/qsub_pilot_b_std_nofusion_out.txt"
+mkdir -p "$PBS_O_WORKDIR/runs"
+exec > >(tee -a "$OUTFILE") 2>&1
 echo "=== Node: $(hostname)  Date: $(date) ==="
 nvidia-smi -L
 

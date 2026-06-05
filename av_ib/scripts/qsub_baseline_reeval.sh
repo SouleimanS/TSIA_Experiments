@@ -8,6 +8,10 @@
 #PBS -o baseline_reeval.qsub.log
 set -euo pipefail
 cd "$PBS_O_WORKDIR"
+
+OUTFILE="$PBS_O_WORKDIR/runs/qsub_baseline_reeval_out.txt"
+mkdir -p "$PBS_O_WORKDIR/runs"
+exec > >(tee -a "$OUTFILE") 2>&1
 source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
 conda activate av_ib
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"

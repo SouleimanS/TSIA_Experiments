@@ -8,6 +8,10 @@
 #PBS -o v6_eval_final_c.qsub.log
 set -euo pipefail
 cd "$PBS_O_WORKDIR"
+
+OUTFILE="$PBS_O_WORKDIR/runs/qsub_v6_eval_final_c_out.txt"
+mkdir -p "$PBS_O_WORKDIR/runs"
+exec > >(tee -a "$OUTFILE") 2>&1
 echo "=== Node: $(hostname)  Date: $(date) ==="
 source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
 conda activate av_ib
