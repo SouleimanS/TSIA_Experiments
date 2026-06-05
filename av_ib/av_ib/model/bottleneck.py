@@ -88,6 +88,16 @@ class VIB(nn.Module):
             kl = kl_per_elem.sum(dim=(0, 1)).mean()
         else:  # "sum"
             kl = kl_per_elem.sum()
+        with torch.no_grad():
+            # No sink concept here; expose noise std + raw KL for monitoring parity
+            # with the sink VIBs. sink_frac is NaN to mark "not a sink VIB".
+            self.last_stats = {
+                "sink_frac":   torch.tensor(float("nan")),
+                "kl_sink":     torch.zeros((), device=kl.device).float(),
+                "kl_nonsink":  kl.detach().float(),
+                "std_nonsink": std.mean().detach().float() if self.training
+                               else torch.exp(0.5 * logvar).mean().detach().float(),
+            }
         return z, kl
 
 

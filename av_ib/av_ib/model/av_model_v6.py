@@ -123,6 +123,14 @@ class SinkAwareVIB(nn.Module):
         kl_nonsink = (kl_per_token * (~sink_mask).float()).sum()
         kl_combined = kl_nonsink + self.beta_sink_ratio * kl_sink
 
+        with torch.no_grad():
+            self.last_stats = {
+                "sink_frac":   sink_mask.float().mean().detach().float(),
+                "kl_sink":     kl_sink.detach().float(),
+                "kl_nonsink":  kl_nonsink.detach().float(),
+                "std_nonsink": torch.exp(0.5 * logvar_nonsink).mean().detach().float(),
+            }
+
         return z, kl_combined, sink_mask
 
 
@@ -183,6 +191,15 @@ class NormTopKSinkVIB(nn.Module):
         kl_per_token = 0.5 * (mu.pow(2) + logvar.exp() - logvar - 1.0).mean(dim=-1)
         kl_sink    = (kl_per_token *  sink_mask.float()).sum()
         kl_nonsink = (kl_per_token * (~sink_mask).float()).sum()
+
+        with torch.no_grad():
+            self.last_stats = {
+                "sink_frac":   sink_mask.float().mean().detach().float(),
+                "kl_sink":     kl_sink.detach().float(),
+                "kl_nonsink":  kl_nonsink.detach().float(),
+                "std_nonsink": torch.exp(0.5 * logvar_nonsink).mean().detach().float(),
+            }
+
         return z, kl_nonsink + self.beta_sink_ratio * kl_sink, sink_mask
 
 
@@ -423,7 +440,29 @@ class AVModelV6(nn.Module):
         nll_aux_v = F.cross_entropy(logits_v, target.to(logits_v.device))
         nll_aux_a = F.cross_entropy(logits_a, target.to(logits_a.device))
 
+        self.last_diagnostics = self._collect_diagnostics()
+
         return nll, nll_aux_v, nll_aux_a, kls["v"], kls["a"], kls["j"]
+
+    def _collect_diagnostics(self) -> dict:
+        """Flatten per-bottleneck last_stats into a logging-friendly dict.
+
+        Surfaces the failure modes that beta=0 pilots would otherwise hide:
+          sink_frac_{v,a} -> 0.0 means sink classification is inert (Issue #5)
+          std_nonsink_{v,a}     -> reparam noise still injected at beta=0 (Issue #3/#7)
+          kl_{sink,nonsink}_{v,a} -> raw KL split before beta_sink_ratio
+        """
+        out = {}
+        for tag, mod in (("v", self.bottleneck_v), ("a", self.bottleneck_a)):
+            stats = getattr(mod, "last_stats", None)
+            if not stats:
+                continue
+            for k, val in stats.items():
+                try:
+                    out[f"{k}_{tag}"] = float(val.item())
+                except (AttributeError, ValueError):
+                    out[f"{k}_{tag}"] = float("nan")
+        return out
 
     # ----------------------------------------------------------------
     # Generation forward

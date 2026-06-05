@@ -134,13 +134,22 @@ def run_training(
             "lr": lr,
             "elapsed_s": time.time() - t0,
         }
+        # Sink/noise diagnostics (only present for AVModelV6, not the baseline)
+        diag = getattr(model, "last_diagnostics", None)
+        if isinstance(diag, dict):
+            rec.update(diag)
         log_f.write(json.dumps(rec) + "\n")
         log_f.flush()
 
         if step % print_every == 0:
+            extra = ""
+            if isinstance(diag, dict) and "sink_frac_v" in diag:
+                extra = (f"  sink_v={diag['sink_frac_v']:.2f}"
+                         f"  std_v={diag.get('std_nonsink_v', float('nan')):.3f}"
+                         f"  std_a={diag.get('std_nonsink_a', float('nan')):.3f}")
             print(f"  step {step:4d}  loss={rec['loss']:7.3f}  nll={rec['nll']:6.3f}  "
                   f"kl=({rec['kl_v']:.0f},{rec['kl_a']:.0f},{rec['kl_j']:.0f})  "
-                  f"gn={rec['grad_norm']:.2f}  t={rec['elapsed_s']:.0f}s",
+                  f"gn={rec['grad_norm']:.2f}{extra}  t={rec['elapsed_s']:.0f}s",
                   flush=True)
 
         # Periodic checkpoint (every save_every steps, if save_every > 0)
