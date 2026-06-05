@@ -33,7 +33,8 @@ def main(args):
     model = QwenLoRABaseline(use_lora=True, lora_r=args.lora_r, lora_alpha=args.lora_alpha)
 
     print("\n[2/3] Building dataset...")
-    dataset = build_dataset(args.dataset, args.ann_path, args.video_root)
+    dataset = build_dataset(args.dataset, args.ann_path, args.video_root,
+                            max_samples=args.max_samples, seed=args.seed)
     loader = DataLoader(
         dataset,
         batch_size=1,
@@ -73,6 +74,8 @@ if __name__ == "__main__":
     p.add_argument("--log-path", default="train_log.jsonl")
     p.add_argument("--ckpt-path", default=None)
     p.add_argument("--print-every", type=int, default=100)
-    p.add_argument("--save-every", type=int, default=2000)
+    p.add_argument("--save-every", type=int, default=0)
+    p.add_argument("--max-samples", type=int, default=0)
+    p.add_argument("--seed", type=int, default=42)
     args = p.parse_args()
     main(args)

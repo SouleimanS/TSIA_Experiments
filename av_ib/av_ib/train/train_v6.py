@@ -21,6 +21,8 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
+import random
+
 from av_ib.model.av_model_v6 import _ALL_VARIANTS
 
 
@@ -41,15 +43,25 @@ def _collate(batch):
 # Dataset factory
 # ---------------------------------------------------------------------------
 
-def build_dataset(dataset: str, ann_path: str, video_root: str):
+def build_dataset(dataset: str, ann_path: str, video_root: str,
+                  max_samples: int = 0, seed: int = 42):
     if dataset == "music_avqa":
         from av_ib.data.musicavqa import MusicAVQADataset
-        return MusicAVQADataset(ann_path, video_root)
+        ds = MusicAVQADataset(ann_path, video_root)
     elif dataset == "avqa":
         from av_ib.data.avqa import AVQADataset
-        return AVQADataset(ann_path, video_root)
+        ds = AVQADataset(ann_path, video_root)
     else:
         raise ValueError(f"Unknown dataset: {dataset!r}. Choose music_avqa or avqa.")
+
+    if max_samples > 0 and len(ds) > max_samples:
+        from torch.utils.data import Subset
+        rng = random.Random(seed)
+        indices = rng.sample(range(len(ds)), max_samples)
+        ds = Subset(ds, sorted(indices))
+        print(f"  Subset: {max_samples} samples (seed={seed})")
+
+    return ds
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +82,8 @@ def main(args):
     )
 
     print("\n[2/3] Building dataset...")
-    dataset = build_dataset(args.dataset, args.ann_path, args.video_root)
+    dataset = build_dataset(args.dataset, args.ann_path, args.video_root,
+                            max_samples=args.max_samples, seed=args.seed)
     loader = DataLoader(
         dataset,
         batch_size=1,
@@ -128,5 +141,9 @@ if __name__ == "__main__":
     p.add_argument("--print-every", type=int, default=1)
     p.add_argument("--save-every", type=int, default=0,
                    help="Save step_N.pt every N steps (0 = disabled)")
+    p.add_argument("--max-samples", type=int, default=0,
+                   help="Cap dataset size to N randomly selected samples (0 = use all)")
+    p.add_argument("--seed", type=int, default=42,
+                   help="Random seed for subset selection")
     args = p.parse_args()
     main(args)
