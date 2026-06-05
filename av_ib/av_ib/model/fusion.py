@@ -45,6 +45,12 @@ class _CrossAttnBlock(nn.Module):
             nn.GELU(),
             nn.Linear(ffn_mult * d_model, d_model),
         )
+        # Zero-init output projections so both attn and ffn residuals are 0 at
+        # step 0 → MutualCrossAttention is identity at init, starts at baseline.
+        nn.init.zeros_(self.attn.out_proj.weight)
+        nn.init.zeros_(self.attn.out_proj.bias)
+        nn.init.zeros_(self.ffn[2].weight)
+        nn.init.zeros_(self.ffn[2].bias)
 
     def forward(self, x: Tensor, y: Tensor) -> Tensor:
         q = self.ln_q(x)

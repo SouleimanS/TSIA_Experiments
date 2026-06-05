@@ -27,9 +27,10 @@ python -u -m av_ib.train.train_v6 \
     --ann-path "$ANN_PATH" \
     --video-root "$VIDEO_ROOT" \
     --variant b_topk_fusion_adavib2 \
+    --adaptive-beta-base 0.3 \
     --num-steps 63854 \
     --lr 1e-4 \
-    --beta-v 0 --beta-a 0 --beta-j 0 \
+    --beta-v 1 --beta-a 1 --beta-j 0 \
     --aux-weight 0.1 \
     --log-path runs/v6_b_topk_fusion_adavib2_mavqa/log.jsonl \
     --ckpt-path runs/v6_b_topk_fusion_adavib2_mavqa/final.pt \

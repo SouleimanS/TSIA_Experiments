@@ -29,7 +29,7 @@ python -u -m av_ib.train.train_v6 \
     --variant b_topk_fusion_adavib \
     --num-steps 63854 \
     --lr 1e-4 \
-    --beta-v 0 --beta-a 0 --beta-j 0 \
+    --beta-v 1 --beta-a 1 --beta-j 0 \
     --aux-weight 0.1 \
     --log-path runs/v6_b_topk_fusion_adavib_avqa/log.jsonl \
     --ckpt-path runs/v6_b_topk_fusion_adavib_avqa/final.pt \

@@ -59,6 +59,9 @@ class VIB(nn.Module):
         self.kl_reduction = kl_reduction
         super().__init__()
         self.fc_mu = nn.Linear(d_model, d_model)
+        # Zero-init so mu = x + 0 = x at step 0 → identity at init (matches SinkAwareVIB).
+        nn.init.zeros_(self.fc_mu.weight)
+        nn.init.zeros_(self.fc_mu.bias)
         self.fc_logvar = nn.Linear(d_model, d_model)
         # Initialize logvar head to output small variance initially, so the
         # bottleneck behaves near-deterministically until KL pressure pushes it.
@@ -66,7 +69,7 @@ class VIB(nn.Module):
         nn.init.constant_(self.fc_logvar.bias, -3.0)  # exp(-3) ~ 0.05 stddev
 
     def forward(self, av_tokens: Tensor) -> Tuple[Tensor, Tensor]:
-        mu = self.fc_mu(av_tokens)
+        mu = av_tokens + self.fc_mu(av_tokens)  # residual; zero-init → identity at step 0
         logvar = self.fc_logvar(av_tokens)
         # Stability clamp: prevents exp(logvar) overflow when the VIB is stacked
         # (e.g. in C-MIB where the joint VIB sees stochastic samples as input).
