@@ -363,19 +363,26 @@ class AVModelV6(nn.Module):
         kls, zs, masks = {}, {}, {}
 
         def provider(audio_out: Tensor, video_out: Tensor) -> Tensor:
-            # Lazy device/dtype migration: Qwen's device_map="auto" may place
-            # encoder outputs on a different device than our modules.
+            # Device migration only — keep the added C-MIB modules in fp32 and
+            # cast the bf16 encoder outputs up to fp32 instead. Training these
+            # small modules in bf16 with AdamW at lr=1e-4 silently drops updates
+            # once weights grow past the bf16 ULP (~0.004*|w|); fp32 master
+            # weights avoid that. The splicer casts z_j back to the LLM dtype
+            # before masked_scatter, so the bf16 backbone is unaffected.
             target_device = video_out.device
-            target_dtype  = video_out.dtype
             sample_param  = next(self.bottleneck_v.parameters())
-            if sample_param.device != target_device or sample_param.dtype != target_dtype:
+            if sample_param.device != target_device:
                 mods = [self.bottleneck_v, self.bottleneck_a, self.aux_head_v, self.aux_head_a]
                 if self.fusion is not None:
                     mods.append(self.fusion)
                 if self.bottleneck_joint is not None:
                     mods.append(self.bottleneck_joint)
                 for mod in mods:
-                    mod.to(device=target_device, dtype=target_dtype)
+                    mod.to(device=target_device)  # device only; stay fp32
+
+            # Cast bf16 encoder outputs up to fp32 so they match the fp32 modules
+            video_out = video_out.float()
+            audio_out = audio_out.float()
 
             # Video VIB (always SinkAwareVIB)
             z_v, kl_v, mask_v = self.bottleneck_v(video_out)
