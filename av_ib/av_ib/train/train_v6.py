@@ -1,12 +1,14 @@
-"""Training driver for AVModelV6 (sink-aware C-MIB) on MUSIC-AVQA.
+"""Training driver for AVModelV6 on MUSIC-AVQA or AVQA.
 
 Usage:
-    python -m av_ib.train.train_v6 \
-        --ann-path /path/to/avqa-train.json \
-        --video-root /path/to/videos/all \
-        --num-steps 100 \
-        --beta-v 0 --beta-a 0 --beta-j 0 \
-        --log-path runs/sanity/log.jsonl \
+    python -m av_ib.train.train_v6 \\
+        --dataset music_avqa \\
+        --ann-path /path/to/avqa-train.json \\
+        --video-root /path/to/videos \\
+        --variant b_std_fusion \\
+        --num-steps 100 \\
+        --beta-v 0 --beta-a 0 --beta-j 0 \\
+        --log-path runs/sanity/log.jsonl \\
         --ckpt-path runs/sanity/final.pt
 """
 from __future__ import annotations
@@ -17,74 +19,64 @@ import sys
 from pathlib import Path
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
+
+from av_ib.model.av_model_v6 import _ALL_VARIANTS
 
 
-class MusicAVQAPathDataset(Dataset):
-    """Returns file paths + strings — matches QwenOmniWrapper.forward_train signature.
+# ---------------------------------------------------------------------------
+# Collation
+# ---------------------------------------------------------------------------
 
-    NOT the same as the old MusicAVQADataset, which returned preprocessed tensors.
-    The Qwen wrapper does its own loading via process_mm_info, so we just point at files.
-    """
-
-    def __init__(self, ann_path, video_root, skip_deleted=True):
-        with open(ann_path) as f:
-            records = json.load(f)
-        if skip_deleted:
-            records = [r for r in records if r.get("question_deleted", 0) == 0]
-        # Pre-filter to records whose video files exist (skip broken refs)
-        self.video_root = Path(video_root)
-        self.records = [r for r in records
-                        if (self.video_root / f"{r['video_id']}.mp4").exists()]
-        dropped = len(records) - len(self.records)
-        if dropped:
-            print(f"  Dropped {dropped} records with missing videos.")
-        print(f"  Dataset size: {len(self.records)} records.")
-
-    def __len__(self):
-        return len(self.records)
-
-    def __getitem__(self, idx):
-        from av_ib.data.musicavqa import render_question
-        rec = self.records[idx]
-        video_path = str(self.video_root / f"{rec['video_id']}.mp4")
-        prompt = render_question(rec["question_content"], rec["templ_values"])
-        answer = rec["anser"]
-        return {
-            "video": video_path,
-            "audio": video_path,   # audio extracted from video by Qwen processor
-            "prompt": prompt,
-            "answer": answer,
-        }
-
-
-def collate(batch):
-    """B=1 collate that just unstacks the dict fields into parallel lists."""
+def _collate(batch):
     return {
-        "videos": [b["video"] for b in batch],
-        "audios": [b["audio"] for b in batch],
-        "prompts": [b["prompt"] for b in batch],
-        "answers": [b["answer"] for b in batch],
+        "videos":  [b["video_path"] for b in batch],
+        "audios":  [b["audio_path"] for b in batch],
+        "prompts": [b["prompt"]     for b in batch],
+        "answers": [b["answer"]     for b in batch],
     }
 
 
+# ---------------------------------------------------------------------------
+# Dataset factory
+# ---------------------------------------------------------------------------
+
+def build_dataset(dataset: str, ann_path: str, video_root: str):
+    if dataset == "music_avqa":
+        from av_ib.data.musicavqa import MusicAVQADataset
+        return MusicAVQADataset(ann_path, video_root)
+    elif dataset == "avqa":
+        from av_ib.data.avqa import AVQADataset
+        return AVQADataset(ann_path, video_root)
+    else:
+        raise ValueError(f"Unknown dataset: {dataset!r}. Choose music_avqa or avqa.")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main(args):
     print("=" * 60)
-    print(f"v5 training: {args.num_steps} steps")
+    print(f"v6 training | variant={args.variant} | dataset={args.dataset} | steps={args.num_steps}")
     print("=" * 60)
 
     print("\n[1/3] Constructing AVModelV6...")
     from av_ib.model.av_model_v6 import AVModelV6
-    model = AVModelV6(use_lora=(not args.no_lora), variant=args.variant, video_vib=args.video_vib, audio_vib=args.audio_vib, fusion_type=args.fusion)
+    model = AVModelV6(
+        use_lora=(not args.no_lora),
+        variant=args.variant,
+        adaptive_beta_base=args.adaptive_beta_base,
+    )
 
     print("\n[2/3] Building dataset...")
-    dataset = MusicAVQAPathDataset(args.ann_path, args.video_root)
+    dataset = build_dataset(args.dataset, args.ann_path, args.video_root)
     loader = DataLoader(
         dataset,
         batch_size=1,
         shuffle=True,
-        num_workers=0,   # Qwen processor isn't fork-safe; keep main-process loading
-        collate_fn=collate,
+        num_workers=0,   # Qwen processor is not fork-safe
+        collate_fn=_collate,
     )
 
     print("\n[3/3] Starting training loop...")
@@ -101,7 +93,7 @@ def main(args):
         ckpt_path=args.ckpt_path,
         print_every=args.print_every,
         save_every=args.save_every,
-        model_handles_betas=False,  # v6 returns RAW combined KL; trainer applies beta_v/beta_j as usual
+        model_handles_betas=False,
     )
 
     print("\nSummary:", json.dumps(summary, indent=2))
@@ -109,27 +101,32 @@ def main(args):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--ann-path", required=True)
-    p.add_argument("--video-root", required=True)
+    # Dataset
+    p.add_argument("--dataset", choices=("music_avqa", "avqa"), default="music_avqa",
+                   help="Training dataset: music_avqa or avqa (original multi-choice)")
+    p.add_argument("--ann-path", required=True,
+                   help="Path to annotation JSON (avqa-train.json)")
+    p.add_argument("--video-root", required=True,
+                   help="Directory containing <video_id>.mp4 files")
+    # Model
+    p.add_argument("--variant", choices=_ALL_VARIANTS, default="b_std_fusion",
+                   help="v6 architecture variant (see av_model_v6 module docstring)")
+    p.add_argument("--no-lora", action="store_true", default=False,
+                   help="Disable LoRA (full frozen backbone)")
+    p.add_argument("--adaptive-beta-base", type=float, default=0.1,
+                   help="Base scale for AdaVIB beta (only used by *_adavib variants)")
+    # Optimisation
     p.add_argument("--num-steps", type=int, default=100)
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--beta-v", type=float, default=0.0)
     p.add_argument("--beta-a", type=float, default=0.0)
     p.add_argument("--beta-j", type=float, default=0.0)
     p.add_argument("--aux-weight", type=float, default=0.1)
+    # Logging / checkpoints
     p.add_argument("--log-path", default="train_log.jsonl")
     p.add_argument("--ckpt-path", default=None)
     p.add_argument("--print-every", type=int, default=1)
-    p.add_argument("--no-lora", action="store_true", default=False, help="Disable LoRA on the LLM (full frozen)")
-    p.add_argument("--variant", choices=("a", "b", "b_bis", "b_bis_2", "b_bis_3", "b_bis_4", "c"), default="a",
-                   help="v6 architecture variant: a=3VIB-sink-everywhere, b=2VIB-no-joint, c=3VIB-sink-on-v-only")
-    p.add_argument("--video-vib", choices=("sink", "standard"), default="sink",
-                   help="video bottleneck type: sink=SinkAwareVIB, standard=plain VIB (isolation ablation)")
-    p.add_argument("--audio-vib", choices=("standard", "norm_topk"), default="standard",
-                   help="audio VIB: standard=plain VIB, norm_topk=top-k norm sink protection")
-    p.add_argument("--fusion", choices=("mutual", "sink_sym", "none"), default="mutual",
-                   help="fusion module: mutual=MutualCrossAttention, sink_sym=sink-mediated symmetric")
     p.add_argument("--save-every", type=int, default=0,
-                   help="If >0, save step_N.pt every N steps")
+                   help="Save step_N.pt every N steps (0 = disabled)")
     args = p.parse_args()
     main(args)

@@ -121,7 +121,12 @@ def run_eval(model, items, video_dir, out_csv, out_json, is_baseline=False, ever
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt-path", default=None)
-    ap.add_argument("--variant",   choices=("a","b","c"), default="b")
+    ap.add_argument("--variant",
+                    choices=("a", "c",
+                             "b_std_fusion", "b_topk_fusion",
+                             "b_std_nofusion", "b_topk_nofusion",
+                             "b_topk_fusion_adavib", "b_topk_fusion_adavib2"),
+                    default="b_std_fusion")
     ap.add_argument("--baseline",  action="store_true")
     ap.add_argument("--qa-json",   default=str(AVHBENCH_QA))
     ap.add_argument("--video-dir", default=str(AVHBENCH_VIDS))
