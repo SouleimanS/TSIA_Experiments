@@ -57,6 +57,10 @@ class VIB(nn.Module):
         if kl_reduction not in ("mean", "mean_per_dim", "sum"):
             raise ValueError(f"kl_reduction must be one of mean|mean_per_dim|sum, got {kl_reduction!r}")
         self.kl_reduction = kl_reduction
+        # When False, forward never injects reparam noise even in train mode.
+        # Lets a beta=0 pilot isolate the splice path from the noise (see
+        # AVModelV6.set_sample_noise). Default True = standard VIB behavior.
+        self.sample_noise = True
         super().__init__()
         self.fc_mu = nn.Linear(d_model, d_model)
         # Zero-init so mu = x + 0 = x at step 0 → identity at init (matches SinkAwareVIB).
@@ -75,8 +79,8 @@ class VIB(nn.Module):
         # (e.g. in C-MIB where the joint VIB sees stochastic samples as input).
         # Range [-10, 10] gives exp(logvar) in [4.5e-5, 22026], plenty wide.
         logvar = logvar.clamp(min=-10.0, max=10.0)
-        if self.training:
-            std = torch.exp(0.5 * logvar)
+        std = torch.exp(0.5 * logvar)
+        if self.training and self.sample_noise:
             eps = torch.randn_like(std)
             z = mu + std * eps
         else:
@@ -98,8 +102,7 @@ class VIB(nn.Module):
                 "sink_frac":   torch.tensor(float("nan")),
                 "kl_sink":     torch.zeros((), device=kl.device).float(),
                 "kl_nonsink":  kl.detach().float(),
-                "std_nonsink": std.mean().detach().float() if self.training
-                               else torch.exp(0.5 * logvar).mean().detach().float(),
+                "std_nonsink": std.mean().detach().float(),
             }
         return z, kl
 

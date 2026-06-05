@@ -85,6 +85,7 @@ class SinkAwareVIB(nn.Module):
         self.dsink_dims = list(dsink_dims) if dsink_dims is not None else list(DSINK_DIMS)
         self.tau = tau
         self.beta_sink_ratio = beta_sink_ratio
+        self.sample_noise = True  # gated off for noise-free pilots (see set_sample_noise)
 
         # Non-sink path
         self.fc_mu_nonsink = nn.Linear(d_model, d_model)
@@ -101,7 +102,11 @@ class SinkAwareVIB(nn.Module):
         self.log_sigma_sink = nn.Parameter(torch.tensor(-10.0))
 
     def forward(self, x: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
-        sink_mask = _classify_sinks(x, self.dsink_dims, self.tau)  # (B, T)
+        # phi = per-token sink score (before thresholding). Recorded so the probe
+        # can dump its distribution and recommend a tau without retraining.
+        normed = _rmsnorm(x)
+        phi = normed[..., self.dsink_dims].abs().max(dim=-1).values  # (B, T)
+        sink_mask = phi >= self.tau
 
         mu_nonsink = x + self.fc_mu_nonsink(x)
         logvar_nonsink = self.fc_logvar_nonsink(x).clamp(min=-10.0, max=10.0)
@@ -113,7 +118,7 @@ class SinkAwareVIB(nn.Module):
         mu = torch.where(mask_3d, mu_sink, mu_nonsink)
         logvar = torch.where(mask_3d, logvar_sink, logvar_nonsink)
 
-        if self.training:
+        if self.training and self.sample_noise:
             z = mu + torch.exp(0.5 * logvar) * torch.randn_like(mu)
         else:
             z = mu
@@ -124,11 +129,20 @@ class SinkAwareVIB(nn.Module):
         kl_combined = kl_nonsink + self.beta_sink_ratio * kl_sink
 
         with torch.no_grad():
+            phi_f = phi.flatten().float()
+            qs = torch.tensor([0.50, 0.60, 0.70, 0.90], device=phi_f.device)
+            phi_q = torch.quantile(phi_f, qs)
             self.last_stats = {
                 "sink_frac":   sink_mask.float().mean().detach().float(),
                 "kl_sink":     kl_sink.detach().float(),
                 "kl_nonsink":  kl_nonsink.detach().float(),
                 "std_nonsink": torch.exp(0.5 * logvar_nonsink).mean().detach().float(),
+                "phi_mean":    phi_f.mean(),
+                "phi_max":     phi_f.max(),
+                "phi_p50":     phi_q[0],
+                "phi_p60":     phi_q[1],
+                "phi_p70":     phi_q[2],
+                "phi_p90":     phi_q[3],
             }
 
         return z, kl_combined, sink_mask
@@ -152,6 +166,7 @@ class NormTopKSinkVIB(nn.Module):
         super().__init__()
         self.top_k_frac = top_k_frac
         self.beta_sink_ratio = beta_sink_ratio
+        self.sample_noise = True  # gated off for noise-free pilots (see set_sample_noise)
 
         self.fc_mu_nonsink = nn.Linear(d_model, d_model)
         nn.init.zeros_(self.fc_mu_nonsink.weight)
@@ -183,7 +198,7 @@ class NormTopKSinkVIB(nn.Module):
         mu     = torch.where(mask_3d, mu_sink,     mu_nonsink)
         logvar = torch.where(mask_3d, logvar_sink, logvar_nonsink)
 
-        if self.training:
+        if self.training and self.sample_noise:
             z = mu + torch.exp(0.5 * logvar) * torch.randn_like(mu)
         else:
             z = mu
@@ -327,6 +342,20 @@ class AVModelV6(nn.Module):
                                  torch.tensor(sorted(set(ids)), dtype=torch.long))
         else:
             self._ans_vocab_ids = None
+
+    # ----------------------------------------------------------------
+    # Noise gate (for noise-free pilots)
+    # ----------------------------------------------------------------
+    def set_sample_noise(self, flag: bool) -> None:
+        """Toggle reparam sampling on every bottleneck.
+
+        flag=False makes z = mu deterministically even in train mode, so a
+        beta=0 pilot isolates the splice/fusion path from the injected
+        reparam noise. flag=True restores standard VIB behavior.
+        """
+        for mod in (self.bottleneck_v, self.bottleneck_a, self.bottleneck_joint):
+            if mod is not None and hasattr(mod, "sample_noise"):
+                mod.sample_noise = flag
 
     # ----------------------------------------------------------------
     # AdaVIB helpers

@@ -40,6 +40,8 @@ def main(args):
     print(f"Probing {n} / {len(ds)} samples...", flush=True)
 
     fracs_v, fracs_a, n_zero_v = [], [], 0
+    # phi distribution accumulators (per-sample summaries of the video sink score)
+    phi_means, phi_maxes, phi_p50, phi_p60, phi_p70, phi_p90 = [], [], [], [], [], []
     for i in range(n):
         rec = ds[i]
         try:
@@ -63,6 +65,17 @@ def main(args):
         if fa is not None and float(fa) == float(fa):
             fracs_a.append(float(fa))
 
+        # Collect phi summaries when present (SinkAwareVIB only)
+        def _g(k):
+            v = sv.get(k, None)
+            return float(v) if v is not None else None
+        for acc, key in ((phi_means, "phi_mean"), (phi_maxes, "phi_max"),
+                         (phi_p50, "phi_p50"), (phi_p60, "phi_p60"),
+                         (phi_p70, "phi_p70"), (phi_p90, "phi_p90")):
+            val = _g(key)
+            if val is not None and val == val:
+                acc.append(val)
+
         if (i + 1) % args.every == 0 and fracs_v:
             print(f"  [{i+1}/{n}] sink_frac_v mean={st.mean(fracs_v):.4f}  "
                   f"zero={n_zero_v}/{len(fracs_v)}", flush=True)
@@ -81,10 +94,35 @@ def main(args):
         print(f"  sink_frac_a mean:  {st.mean(fracs_a):.4f}  "
               f"(top-k audio control, expect ~{0.40:.2f})")
 
-    verdict = ("INERT — dim-based sinks do not fire in vision-encoder space. "
-               "The SinkAwareVIB is just a residual VIB here."
-               if st.mean(fracs_v) < 1e-4 else
-               "ACTIVE — sinks present in encoder space; proceed to the beta sweep.")
+    # --- phi distribution (the sink score before thresholding at tau) ---
+    cur_tau = float(model.bottleneck_v.tau)
+    if phi_means:
+        print(f"\n=== phi distribution (video sink score; current tau={cur_tau:.1f}) ===")
+        print(f"  phi mean:  {st.mean(phi_means):.3f}")
+        print(f"  phi max:   {st.mean(phi_maxes):.3f}  (avg per-sample max)")
+        print(f"  phi p50:   {st.mean(phi_p50):.3f}")
+        print(f"  phi p60:   {st.mean(phi_p60):.3f}")
+        print(f"  phi p70:   {st.mean(phi_p70):.3f}")
+        print(f"  phi p90:   {st.mean(phi_p90):.3f}")
+        # A tau between p60 and p70 yields a 30-40% sink fraction, matching the
+        # audio top-k control. Recommend p70 as a starting point if inert.
+        rec_tau = st.mean(phi_p70)
+        print(f"  -> if recalibrating, try tau ~ {rec_tau:.1f} (p70 -> ~30% sinks)")
+
+    mean_v = st.mean(fracs_v)
+    if mean_v < 1e-4:
+        verdict = ("INERT — dim-based sinks do not fire at tau={:.1f} in "
+                   "vision-encoder space. SinkAwareVIB is just a residual VIB. "
+                   "Options: (1) recalibrate tau to the p70 above; (2) switch "
+                   "video to NormTopKSinkVIB; (3) relocate the IB into the LLM "
+                   "residual stream.".format(cur_tau))
+    elif mean_v > 0.9:
+        verdict = ("SATURATED — nearly every token classifies as a sink at "
+                   "tau={:.1f}. Raise tau toward the p90 above so sinks are a "
+                   "minority.".format(cur_tau))
+    else:
+        verdict = ("ACTIVE — sinks present in encoder space (sink_frac_v="
+                   "{:.3f}); proceed to the beta sweep.".format(mean_v))
     print(f"\n  VERDICT: {verdict}", flush=True)
 
 

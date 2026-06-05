@@ -80,6 +80,9 @@ def main(args):
         variant=args.variant,
         adaptive_beta_base=args.adaptive_beta_base,
     )
+    if args.no_sample_noise:
+        model.set_sample_noise(False)
+        print("  reparam noise DISABLED (z = mu) — pilot isolates splice path")
 
     print("\n[2/3] Building dataset...")
     dataset = build_dataset(args.dataset, args.ann_path, args.video_root,
@@ -145,5 +148,8 @@ if __name__ == "__main__":
                    help="Cap dataset size to N randomly selected samples (0 = use all)")
     p.add_argument("--seed", type=int, default=42,
                    help="Random seed for subset selection")
+    p.add_argument("--no-sample-noise", action="store_true", default=False,
+                   help="Disable reparam noise (z=mu) to isolate the splice path "
+                        "from injected VIB noise in a beta=0 pilot")
     args = p.parse_args()
     main(args)
