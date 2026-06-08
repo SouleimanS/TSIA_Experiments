@@ -123,7 +123,9 @@ class SinkAwareVIB(nn.Module):
         else:
             z = mu
 
-        kl_per_token = 0.5 * (mu.pow(2) + logvar.exp() - logvar - 1.0).mean(dim=-1)  # (B,T)
+        kl_elem_mu  = 0.5 * mu.pow(2)                          # location term (B,T,D)
+        kl_elem_var = 0.5 * (logvar.exp() - logvar - 1.0)     # variance term (B,T,D)
+        kl_per_token = (kl_elem_mu + kl_elem_var).mean(dim=-1) # (B,T)
         kl_sink    = (kl_per_token *  sink_mask.float()).sum()
         kl_nonsink = (kl_per_token * (~sink_mask).float()).sum()
         kl_combined = kl_nonsink + self.beta_sink_ratio * kl_sink
@@ -132,17 +134,22 @@ class SinkAwareVIB(nn.Module):
             phi_f = phi.flatten().float()
             qs = torch.tensor([0.50, 0.60, 0.70, 0.90], device=phi_f.device)
             phi_q = torch.quantile(phi_f, qs)
+            kl_flat = kl_per_token.flatten().float()
             self.last_stats = {
-                "sink_frac":   sink_mask.float().mean().detach().float(),
-                "kl_sink":     kl_sink.detach().float(),
-                "kl_nonsink":  kl_nonsink.detach().float(),
-                "std_nonsink": torch.exp(0.5 * logvar_nonsink).mean().detach().float(),
-                "phi_mean":    phi_f.mean(),
-                "phi_max":     phi_f.max(),
-                "phi_p50":     phi_q[0],
-                "phi_p60":     phi_q[1],
-                "phi_p70":     phi_q[2],
-                "phi_p90":     phi_q[3],
+                "sink_frac":        sink_mask.float().mean().detach().float(),
+                "kl_sink":          kl_sink.detach().float(),
+                "kl_nonsink":       kl_nonsink.detach().float(),
+                "std_nonsink":      torch.exp(0.5 * logvar_nonsink).mean().detach().float(),
+                "kl_mu_term":       kl_elem_mu.mean().detach().float(),
+                "kl_var_term":      kl_elem_var.mean().detach().float(),
+                "kl_per_tok_max":   kl_flat.max().detach().float(),
+                "kl_per_tok_p90":   torch.quantile(kl_flat, 0.9).detach().float(),
+                "phi_mean":         phi_f.mean(),
+                "phi_max":          phi_f.max(),
+                "phi_p50":          phi_q[0],
+                "phi_p60":          phi_q[1],
+                "phi_p70":          phi_q[2],
+                "phi_p90":          phi_q[3],
             }
 
         return z, kl_combined, sink_mask
@@ -203,16 +210,23 @@ class NormTopKSinkVIB(nn.Module):
         else:
             z = mu
 
-        kl_per_token = 0.5 * (mu.pow(2) + logvar.exp() - logvar - 1.0).mean(dim=-1)
+        kl_elem_mu  = 0.5 * mu.pow(2)
+        kl_elem_var = 0.5 * (logvar.exp() - logvar - 1.0)
+        kl_per_token = (kl_elem_mu + kl_elem_var).mean(dim=-1)
         kl_sink    = (kl_per_token *  sink_mask.float()).sum()
         kl_nonsink = (kl_per_token * (~sink_mask).float()).sum()
 
         with torch.no_grad():
+            kl_flat = kl_per_token.flatten().float()
             self.last_stats = {
-                "sink_frac":   sink_mask.float().mean().detach().float(),
-                "kl_sink":     kl_sink.detach().float(),
-                "kl_nonsink":  kl_nonsink.detach().float(),
-                "std_nonsink": torch.exp(0.5 * logvar_nonsink).mean().detach().float(),
+                "sink_frac":      sink_mask.float().mean().detach().float(),
+                "kl_sink":        kl_sink.detach().float(),
+                "kl_nonsink":     kl_nonsink.detach().float(),
+                "std_nonsink":    torch.exp(0.5 * logvar_nonsink).mean().detach().float(),
+                "kl_mu_term":     kl_elem_mu.mean().detach().float(),
+                "kl_var_term":    kl_elem_var.mean().detach().float(),
+                "kl_per_tok_max": kl_flat.max().detach().float(),
+                "kl_per_tok_p90": torch.quantile(kl_flat, 0.9).detach().float(),
             }
 
         return z, kl_nonsink + self.beta_sink_ratio * kl_sink, sink_mask

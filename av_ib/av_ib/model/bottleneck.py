@@ -86,7 +86,9 @@ class VIB(nn.Module):
         else:
             z = mu
         # KL( N(mu, sigma^2) || N(0, I) ) per element = 0.5 * (mu^2 + sigma^2 - logvar - 1)
-        kl_per_elem = 0.5 * (mu.pow(2) + logvar.exp() - logvar - 1.0)
+        kl_elem_mu  = 0.5 * mu.pow(2)
+        kl_elem_var = 0.5 * (logvar.exp() - logvar - 1.0)
+        kl_per_elem = kl_elem_mu + kl_elem_var
         # Reduce per-element KL according to self.kl_reduction (see __init__).
         if self.kl_reduction == "mean":
             kl = kl_per_elem.mean()
@@ -98,11 +100,16 @@ class VIB(nn.Module):
         with torch.no_grad():
             # No sink concept here; expose noise std + raw KL for monitoring parity
             # with the sink VIBs. sink_frac is NaN to mark "not a sink VIB".
+            kl_flat = kl_per_elem.flatten().float()
             self.last_stats = {
-                "sink_frac":   torch.tensor(float("nan")),
-                "kl_sink":     torch.zeros((), device=kl.device).float(),
-                "kl_nonsink":  kl.detach().float(),
-                "std_nonsink": std.mean().detach().float(),
+                "sink_frac":      torch.tensor(float("nan")),
+                "kl_sink":        torch.zeros((), device=kl.device).float(),
+                "kl_nonsink":     kl.detach().float(),
+                "std_nonsink":    std.mean().detach().float(),
+                "kl_mu_term":     kl_elem_mu.mean().detach().float(),
+                "kl_var_term":    kl_elem_var.mean().detach().float(),
+                "kl_per_tok_max": kl_flat.max().detach().float(),
+                "kl_per_tok_p90": torch.quantile(kl_flat, 0.9).detach().float(),
             }
         return z, kl
 
