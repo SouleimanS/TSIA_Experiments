@@ -276,6 +276,13 @@ class AVModelV6(nn.Module):
         self.adaptive_beta = adaptive_beta
         self.adaptive_beta_base = adaptive_beta_base
 
+        # Explainability hook (default off): if set to a callable
+        # (z_joint, n_v, n_a) -> z_joint, it transforms the spliced tokens just
+        # before they are written into the LLM. Used by eval/explain.py E1 to
+        # ablate the AV stream (zero / mean / shuffle / single-modality) and
+        # measure how much the model actually relies on it. None = no-op.
+        self.z_ablation = None
+
         # Derived fusion/audio-vib flags from variant name
         self._use_topk_audio  = "topk" in variant
         self._use_fusion      = "nofusion" not in variant and variant not in ("a", "c")
@@ -460,6 +467,12 @@ class AVModelV6(nn.Module):
 
             kls["v"], kls["a"], kls["j"] = kl_v, kl_a, kl_j
             zs["v"], zs["a"] = z_v, z_a
+
+            # Explainability ablation hook (eval only; None in normal training).
+            # z_j is ordered [video, audio] with n_v video tokens first.
+            if self.z_ablation is not None:
+                z_j = self.z_ablation(z_j, z_v.size(1), z_a.size(1))
+
             return z_j
 
         return provider, kls, zs, masks
