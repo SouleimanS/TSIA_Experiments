@@ -13,7 +13,10 @@ JUDGMENT_TASKS = {"Audio-driven Video Hallucination",
                   "Video-driven Audio Hallucination", "AV Matching"}
 
 def parse_yes_no(text):
-    h = text.strip().lower()[:40]
+    # Qwen3 prepends <think>...</think> before the answer; skip it.
+    if "</think>" in text:
+        text = text.split("</think>", 1)[1]
+    h = text.strip().lower()[:100]
     if re.search(r"\byes\b", h): return "Yes"
     if re.search(r"\bno\b",  h): return "No"
     return "??"
@@ -79,11 +82,11 @@ def infer(model, videos, audios, text, is_baseline, video_path=None):
                            videos=videos_in, return_tensors="pt",
                            padding=True).to(model.device)
         with torch.no_grad():
-            out = model.generate(**inputs, max_new_tokens=20, use_audio_in_video=True)
+            out = model.generate(**inputs, max_new_tokens=512, use_audio_in_video=True)
         return processor.batch_decode(out[:, inputs["input_ids"].shape[1]:],
                                       skip_special_tokens=True)[0]
     with torch.no_grad():
-        return model.forward_generate(videos, audios, [text], max_new_tokens=20)[0]
+        return model.forward_generate(videos, audios, [text], max_new_tokens=512)[0]
 
 def run_eval(model, items, video_dir, out_csv, out_json, is_baseline=False, every=20):
     Path(out_csv).parent.mkdir(parents=True, exist_ok=True)
