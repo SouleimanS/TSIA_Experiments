@@ -20,6 +20,12 @@ source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
 conda activate av_ib
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
 
+# Force single GPU: 30B bfloat16 ~60GB fits on one A100/H100.
+# device_map="auto" across multiple GPUs causes cross-device errors in
+# our VIB hooks since z_j ends up on a different device than the next
+# transformer layer.
+export CUDA_VISIBLE_DEVICES=0
+
 QA_JSON="$HOME/SOULEIMAN_repo/datasets/AVHBench/data/AVHBench_v0/json/qa.json"
 VIDEO_DIR="$HOME/SOULEIMAN_repo/datasets/AVHBench/data/AVHBench_v0/video"
 VARIANT="b_topk_nofusion"
