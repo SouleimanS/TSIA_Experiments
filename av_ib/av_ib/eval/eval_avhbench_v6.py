@@ -34,9 +34,11 @@ def metrics(records):
             "yes_pct":(tp+fp)/n*100,"TP":tp,"TN":tn,"FP":fp,"FN":fn,"non_yes_no":qq}
 
 def load_av(video_path, device):
-    # Reuse the same preprocessors as the v6 training pipeline
     from av_ib.eval.avhbench import _load_video, _load_audio
-    return _load_video(video_path, device), _load_audio(video_path, device)
+    # Cast to bfloat16 to match the model dtype (preprocessors return float16/float32)
+    vid = _load_video(video_path, device).to(torch.bfloat16)
+    aud = _load_audio(video_path, device).to(torch.bfloat16)
+    return vid, aud
 
 def build_v6(variant, ckpt_path, device):
     print(f"[1/3] Building AVModelV6 variant={variant}...", flush=True)
