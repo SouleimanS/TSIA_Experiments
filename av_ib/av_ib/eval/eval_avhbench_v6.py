@@ -78,9 +78,12 @@ def infer(model, videos, audios, text, is_baseline, video_path=None):
         convo = build_conversation(video_path, text)
         text_input = processor.apply_chat_template(convo, add_generation_prompt=True, tokenize=False)
         audios_in, images_in, videos_in = process_mm_info(convo, use_audio_in_video=True)
-        inputs = processor(text=text_input, audio=audios_in, images=images_in,
-                           videos=videos_in, return_tensors="pt",
-                           padding=True).to(model.device)
+        raw_inputs = processor(text=text_input, audio=audios_in, images=images_in,
+                               videos=videos_in, return_tensors="pt", padding=True)
+        # Cast floating-point tensors to bfloat16 to match the model dtype
+        inputs = {k: (v.to(device=model.device, dtype=torch.bfloat16)
+                      if torch.is_floating_point(v) else v.to(model.device))
+                  for k, v in raw_inputs.items()}
         with torch.no_grad():
             out = model.generate(**inputs, max_new_tokens=512, use_audio_in_video=True)
         return processor.batch_decode(out[:, inputs["input_ids"].shape[1]:],
