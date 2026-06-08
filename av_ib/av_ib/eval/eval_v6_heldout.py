@@ -1,7 +1,11 @@
-"""Held-out accuracy evaluation for AVModelV6 checkpoints.
+"""Held-out accuracy + NLL evaluation for AVModelV6 checkpoints.
 
 Excludes the training indices (--train-seed / --train-max-samples) so every
-sample seen here is one the model has never trained on.
+sample seen here is one the model has never trained on. For each sample it
+records three things, giving a rate-distortion point per checkpoint:
+    accuracy   (generation, parsed against the closed vocab)
+    NLL        (teacher-forced answer NLL; noise off -> z = mu)
+    KL_v/KL_a  (operating-point KL on held-out data)
 
 Usage (one run):
     python -m av_ib.eval.eval_v6_heldout \
@@ -12,7 +16,8 @@ Usage (one run):
         [--ckpt-path runs/gate3_beta7e6/final.pt]
 
 Re-run for each checkpoint; results accumulate under --out-dir and a
-comparison table is printed when sibling metrics.json files exist.
+comparison table (accuracy + NLL + KL_v) is printed when sibling
+metrics.json files exist.
 """
 from __future__ import annotations
 
@@ -63,10 +68,11 @@ def _load_model(variant: str, ckpt_path: str | None):
         if "trainable_state" in sd:
             sd = sd["trainable_state"]
         own = dict(model.named_parameters())
-        n_ok = sum(
-            1 for k, v in sd.items()
-            if k in own and not own[k].data.copy_(v.data).isnan().any()
-        )
+        n_ok = 0
+        for k, v in sd.items():
+            if k in own:
+                own[k].data.copy_(v.data)
+                n_ok += 1
         print(f"  Loaded {n_ok}/{len(sd)} params", flush=True)
     return model
 
@@ -98,6 +104,18 @@ def _run(model, ds, idxs: list[int], every: int = 10) -> list[dict]:
         parsed  = parse_answer(raw)
         correct = int(parsed == gold)
 
+        # Teacher-forced NLL + operating-point KL (noise off -> z=mu) on this
+        # held-out sample. Gives the rate-distortion point: (kl_v, nll, acc).
+        try:
+            with torch.no_grad():
+                ft = model.forward_train([video_path], [video_path], [prompt],
+                                         [rec["answer"]])
+            nll_val, kl_v_val, kl_a_val = (float(ft[0].item()),
+                                           float(ft[3].item()),
+                                           float(ft[4].item()))
+        except Exception:
+            nll_val = kl_v_val = kl_a_val = float("nan")
+
         type_str = meta.get("type", "[]") if isinstance(meta, dict) else "[]"
         try:
             parts    = json.loads(type_str)
@@ -114,6 +132,9 @@ def _run(model, ds, idxs: list[int], every: int = 10) -> list[dict]:
             "raw_pred":   raw,
             "pred":       parsed,
             "correct":    correct,
+            "nll":        nll_val,
+            "kl_v":       kl_v_val,
+            "kl_a":       kl_a_val,
             "modality":   modality,
             "subtype":    subtype,
             "type_key":   f"{modality}/{subtype}",
@@ -121,8 +142,10 @@ def _run(model, ds, idxs: list[int], every: int = 10) -> list[dict]:
 
         if (s + 1) % every == 0:
             acc  = 100 * sum(r["correct"] for r in results) / len(results)
+            nlls = [r["nll"] for r in results if r["nll"] == r["nll"]]
+            mnll = sum(nlls) / len(nlls) if nlls else float("nan")
             rate = len(results) / (time.time() - t0)
-            print(f"  [{s+1:>4}/{len(idxs)}]  acc={acc:.1f}%  "
+            print(f"  [{s+1:>4}/{len(idxs)}]  acc={acc:.1f}%  nll={mnll:.3f}  "
                   f"rate={rate:.2f}/s", flush=True)
 
     return results
@@ -138,24 +161,35 @@ def _compute(results: list[dict]) -> dict:
         return {}
     n_ok = sum(r["correct"] for r in results)
 
+    def _mean(key, rows):
+        vals = [r[key] for r in rows if r.get(key) == r.get(key)]  # drop NaN
+        return sum(vals) / len(vals) if vals else float("nan")
+
     def _acc(pairs):
-        return {k: {"acc": v[0] / v[1] if v[1] else 0.0, "n": v[1]}
+        # pairs[k] = [n_correct, n_total, rows]
+        return {k: {"acc": v[0] / v[1] if v[1] else 0.0,
+                    "n": v[1],
+                    "nll": _mean("nll", v[2])}
                 for k, v in sorted(pairs.items())}
 
-    by_mod  = defaultdict(lambda: [0, 0])
-    by_sub  = defaultdict(lambda: [0, 0])
-    by_type = defaultdict(lambda: [0, 0])
+    by_mod  = defaultdict(lambda: [0, 0, []])
+    by_sub  = defaultdict(lambda: [0, 0, []])
+    by_type = defaultdict(lambda: [0, 0, []])
     for r in results:
         for d, key in [(by_mod, r["modality"]),
                        (by_sub, r["subtype"]),
                        (by_type, r["type_key"])]:
             d[key][0] += r["correct"]
             d[key][1] += 1
+            d[key][2].append(r)
 
     return {
         "n":            n,
         "n_correct":    n_ok,
         "accuracy":     round(n_ok / n, 4),
+        "mean_nll":     round(_mean("nll", results), 4),
+        "mean_kl_v":    round(_mean("kl_v", results), 2),
+        "mean_kl_a":    round(_mean("kl_a", results), 2),
         "per_modality": _acc(by_mod),
         "per_subtype":  _acc(by_sub),
         "per_type":     _acc(by_type),
@@ -169,10 +203,12 @@ def _print_summary(m: dict, label: str) -> None:
     print(f"  Held-out eval · {label}")
     print(sep)
     print(f"  Overall: {m['accuracy']:.1%}  ({m['n_correct']}/{m['n']})")
+    print(f"  NLL: {m['mean_nll']:.4f}   KL_v: {m['mean_kl_v']:.1f}   "
+          f"KL_a: {m['mean_kl_a']:.1f}")
     print()
     print("  ─── Per Modality ───")
     for mod, d in m["per_modality"].items():
-        print(f"    {mod:<22}: {d['acc']:.1%}  (n={d['n']})")
+        print(f"    {mod:<22}: {d['acc']:.1%}  nll={d['nll']:.3f}  (n={d['n']})")
     print()
     print("  ─── Per Type ───")
     for tk, d in sorted(m["per_type"].items(), key=lambda x: -x[1]["n"]):
@@ -183,19 +219,21 @@ def _print_summary(m: dict, label: str) -> None:
 
 def _print_comparison(entries: list[tuple[str, dict]]) -> None:
     all_mods = sorted({mod for _, m in entries for mod in m.get("per_modality", {})})
-    lw, cw = 20, 12
-    width  = lw + cw * (1 + len(all_mods)) + 2
+    lw, cw = 20, 11
+    width  = lw + cw * (3 + len(all_mods)) + 2
     sep    = "=" * width
-    header = f"  {'Label':<{lw}}" + f"{'Overall':>{cw}}" + \
-             "".join(f"{mod:>{cw}}" for mod in all_mods)
+    header = (f"  {'Label':<{lw}}" + f"{'Overall':>{cw}}" + f"{'NLL':>{cw}}"
+              + f"{'KL_v':>{cw}}" + "".join(f"{mod:>{cw}}" for mod in all_mods))
     print()
     print(sep)
-    print("  Held-out Comparison")
+    print("  Held-out Comparison  (RD: lower NLL at lower KL_v = better)")
     print(sep)
     print(header)
     print("-" * width)
     for label, m in entries:
-        row = f"  {label:<{lw}}{m['accuracy']*100:>{cw-1}.1f}%"
+        row = (f"  {label:<{lw}}{m['accuracy']*100:>{cw-1}.1f}%"
+               f"{m.get('mean_nll', float('nan')):>{cw}.3f}"
+               f"{m.get('mean_kl_v', float('nan')):>{cw}.0f}")
         for mod in all_mods:
             d = m.get("per_modality", {}).get(mod)
             row += f"{d['acc']*100:>{cw-1}.1f}%" if d else f"{'—':>{cw}}"
