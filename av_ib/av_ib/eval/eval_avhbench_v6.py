@@ -106,6 +106,9 @@ def run_eval(model, items, video_dir, out_csv, out_json, is_baseline=False, ever
             raw = infer(model, None, None, rec["text"], is_baseline, video_path=str(vid))
             pred = parse_yes_no(raw)
         except Exception as e:
+            import traceback
+            if n_fail == 0:
+                traceback.print_exc()
             raw, pred, n_fail = f"<ERR:{e}>", "??", n_fail+1
         w.writerow([i, rec["video_id"], rec["task"], rec["text"], rec["label"], raw, pred])
         f.flush()
