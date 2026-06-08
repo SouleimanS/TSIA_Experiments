@@ -88,8 +88,10 @@ def infer(model, videos, audios, text, is_baseline, video_path=None):
             out = model.generate(**inputs, max_new_tokens=512, use_audio_in_video=True)
         return processor.batch_decode(out[:, inputs["input_ids"].shape[1]:],
                                       skip_special_tokens=True)[0]
+    # v6 models: forward_generate expects file path strings, not tensors.
+    # Audio is embedded in the video file (same path for both).
     with torch.no_grad():
-        return model.forward_generate(videos, audios, [text], max_new_tokens=512)[0]
+        return model.forward_generate([video_path], [video_path], [text], max_new_tokens=512)[0]
 
 def run_eval(model, items, video_dir, out_csv, out_json, is_baseline=False, every=20):
     Path(out_csv).parent.mkdir(parents=True, exist_ok=True)
@@ -101,8 +103,7 @@ def run_eval(model, items, video_dir, out_csv, out_json, is_baseline=False, ever
     for i, rec in enumerate(items):
         vid = video_dir / f"{rec['video_id']}.mp4"
         try:
-            vs, au = load_av(str(vid), "cuda")
-            raw = infer(model, vs, au, rec["text"], is_baseline, video_path=str(vid))
+            raw = infer(model, None, None, rec["text"], is_baseline, video_path=str(vid))
             pred = parse_yes_no(raw)
         except Exception as e:
             raw, pred, n_fail = f"<ERR:{e}>", "??", n_fail+1
