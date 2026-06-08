@@ -29,6 +29,22 @@ import torch
 from torch import nn
 
 
+# Compatibility shim: video_llama was written for older transformers that
+# exposed find_pruneable_heads_and_indices in pytorch_utils. Patch it in
+# before the video_llama import triggers the missing-name error.
+import transformers.pytorch_utils as _tpu
+if not hasattr(_tpu, "find_pruneable_heads_and_indices"):
+    def _find_pruneable_heads_and_indices(heads, n_heads, head_size, already_pruned_heads):
+        mask = torch.ones(n_heads, head_size)
+        heads = set(heads) - already_pruned_heads
+        for head in heads:
+            head = head - sum(1 if h < head else 0 for h in already_pruned_heads)
+            mask[head] = 0
+        mask = mask.view(-1).contiguous().eq(1)
+        index = torch.arange(len(mask))[mask].long()
+        return heads, index
+    _tpu.find_pruneable_heads_and_indices = _find_pruneable_heads_and_indices
+
 # Reuse AVHBench's preprocessing
 _AVHBENCH_ROOT = Path.home() / "SOULEIMAN_repo" / "datasets" / "AVHBench" / "AVHBench-Align-FT"
 if str(_AVHBENCH_ROOT) not in sys.path:
