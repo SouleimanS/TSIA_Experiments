@@ -225,6 +225,119 @@ def run_e1(args):
 
 
 # ---------------------------------------------------------------------------
+# AVHARD — mine an "AV-essential" subset (questions that genuinely need BOTH
+# modalities), defined behaviorally rather than by the dataset's type label.
+# ---------------------------------------------------------------------------
+def run_avhard(args):
+    """For each candidate question, generate under identity / zero / video_only /
+    audio_only on the untrained (vanilla) model and classify by modality need:
+
+        AV-essential : id correct, audio_only WRONG, video_only WRONG
+                       (and not zero-solvable) -> BOTH modalities required
+        audio-suff   : id correct, audio_only correct  (video droppable)
+        video-suff   : id correct, video_only correct  (audio droppable)
+        prior-driven : zero correct                     (text prior solves it)
+        too-hard     : id wrong
+
+    Writes the AV-essential records (raw MUSIC-AVQA schema) to --out-json so the
+    subset can be fed straight back as --ann-path for eval/training.
+    """
+    from av_ib.model.av_model_v6 import AVModelV6
+    from av_ib.data.musicavqa import MusicAVQADataset
+    import random
+
+    tag = "untrained" if not args.ckpt_path else f"ckpt={args.ckpt_path}"
+    print(f"Building AVModelV6 (variant={args.variant}, {tag}) for AV-hard mining...",
+          flush=True)
+    model = AVModelV6(use_lora=bool(args.ckpt_path), variant=args.variant).eval()
+    model.set_sample_noise(False)
+    if args.ckpt_path:
+        sd = torch.load(args.ckpt_path, map_location="cpu")
+        if "trainable_state" in sd:
+            sd = sd["trainable_state"]
+        own = dict(model.named_parameters())
+        for k, v in sd.items():
+            if k in own:
+                own[k].data.copy_(v.data)
+
+    ds = MusicAVQADataset(args.ann_path, args.video_root)
+    # question_id -> raw record, for writing the output subset in source schema
+    raw_by_qid = {r["question_id"]: r for r in ds.records}
+
+    rng = random.Random(args.seed)
+    idxs = sorted(rng.sample(range(len(ds)), min(args.num_samples, len(ds))))
+    # Mining conditions: only the four that determine modality need.
+    conds = ["identity", "zero", "video_only", "audio_only"]
+    print(f"Mining {len(idxs)} candidates; conditions={conds}\n", flush=True)
+
+    buckets = {"av_essential": [], "audio_suff": [], "video_suff": [],
+               "prior_driven": [], "too_hard": []}
+    # per source-type tally of how many land in av_essential
+    per_type = defaultdict(lambda: [0, 0])  # tkey -> [av_essential, total]
+
+    for s, i in enumerate(idxs):
+        rec = ds[i]
+        v, a, p = [rec["video_path"]], [rec["audio_path"]], [rec["prompt"]]
+        gold = _norm_answer(rec["answer"])
+        meta = rec.get("meta", {})
+        tkey = _type_key(meta)
+        qid = meta.get("question_id")
+
+        res = {}
+        for c in conds:
+            model.z_ablation = make_ablation(c)
+            try:
+                with torch.no_grad():
+                    g = model.forward_generate(v, a, p, max_new_tokens=5)[0]
+                res[c] = (_norm_answer(g) == gold)
+            except Exception as e:
+                print(f"  [{s}] {c}: gen skip: {e}", flush=True)
+                res[c] = False
+        model.z_ablation = None
+
+        per_type[tkey][1] += 1
+        if not res["identity"]:
+            cat = "too_hard"
+        elif res["zero"]:
+            cat = "prior_driven"
+        elif not res["video_only"] and not res["audio_only"]:
+            cat = "av_essential"
+            per_type[tkey][0] += 1
+        elif res["audio_only"]:
+            cat = "audio_suff"
+        else:
+            cat = "video_suff"
+        buckets[cat].append(qid)
+
+        if (s + 1) % args.every == 0:
+            ne = len(buckets["av_essential"])
+            print(f"  [{s+1}/{len(idxs)}] av_essential so far: {ne} "
+                  f"({100.0*ne/(s+1):.1f}%)", flush=True)
+
+    # ---- report ----
+    n = len(idxs)
+    print("\n" + "=" * 60)
+    print("AV-HARD MINING — behavioral modality-dependence")
+    print("=" * 60)
+    for cat in ["av_essential", "audio_suff", "video_suff",
+                "prior_driven", "too_hard"]:
+        c = len(buckets[cat])
+        print(f"  {cat:<14} {c:>5}  ({100.0*c/max(n,1):5.1f}%)")
+    print("\n  AV-essential rate by source type (label vs reality):")
+    for tkey in sorted(per_type, key=lambda k: -per_type[k][0]):
+        ess, tot = per_type[tkey]
+        print(f"    {tkey:<28} {ess:>4}/{tot:<4} ({100.0*ess/max(tot,1):5.1f}%)")
+
+    # ---- write subset ----
+    essential_qids = [q for q in buckets["av_essential"] if q in raw_by_qid]
+    out_records = [raw_by_qid[q] for q in essential_qids]
+    with open(args.out_json, "w") as f:
+        json.dump(out_records, f, indent=2)
+    print(f"\n  wrote {len(out_records)} AV-essential records -> {args.out_json}")
+    print("=" * 60, flush=True)
+
+
+# ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description="AVModelV6 explainability instrument")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -242,6 +355,19 @@ def main():
     e1.add_argument("--no-generate", dest="generate", action="store_false", default=True,
                     help="Skip generation (NLL only) — faster.")
     e1.set_defaults(func=run_e1)
+
+    mh = sub.add_parser("avhard", help="Mine an AV-essential subset (needs both modalities)")
+    mh.add_argument("--ann-path", required=True)
+    mh.add_argument("--video-root", required=True)
+    mh.add_argument("--variant", default="b_topk_nofusion")
+    mh.add_argument("--ckpt-path", default=None,
+                    help="Default: untrained vanilla model (confound-free mining).")
+    mh.add_argument("--num-samples", type=int, default=400,
+                    help="Candidate pool to scan (the essential subset is a fraction).")
+    mh.add_argument("--seed", type=int, default=7)
+    mh.add_argument("--every", type=int, default=20)
+    mh.add_argument("--out-json", default="runs/avhard_subset.json")
+    mh.set_defaults(func=run_avhard)
 
     args = ap.parse_args()
     args.func(args)
