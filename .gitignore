@@ -107,3 +107,4 @@ av_ib/_archive.tar.gz
 av_ib/_archive/
 **/__pycache__/
 *.pyc
+.claude/worktrees/
