@@ -32,7 +32,7 @@ echo "=== abstain-label mining | untrained model | 3000 candidates | seed=42 ===
 python -u -m av_ib.eval.explain alabels \
     --ann-path "$ANN_PATH" \
     --video-root "$VIDEO_ROOT" \
-    --variant b_topk_nofusion \
+    --variant b_video_only \
     --num-samples 3000 --seed 42 --every 50 \
     --out-json runs/abstain_labels.json
 

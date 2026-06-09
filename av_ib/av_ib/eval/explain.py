@@ -66,6 +66,20 @@ def make_ablation(mode: str):
             return torch.cat([zv, torch.zeros_like(za)], dim=1)
         if mode == "audio_only":   # keep audio, drop video
             return torch.cat([torch.zeros_like(zv), za], dim=1)
+        if mode == "vid_zero":    # zero out only video tokens
+            return torch.cat([torch.zeros_like(zv), za], dim=1)
+        if mode == "aud_zero":    # zero out only audio tokens
+            return torch.cat([zv, torch.zeros_like(za)], dim=1)
+        if mode == "vid_mean":    # mean-replace only video tokens
+            zv2 = zv.mean(dim=1, keepdim=True).expand_as(zv)
+            return torch.cat([zv2, za], dim=1)
+        if mode == "aud_mean":    # mean-replace only audio tokens
+            za2 = za.mean(dim=1, keepdim=True).expand_as(za)
+            return torch.cat([zv, za2], dim=1)
+        if mode == "vid_noise":   # Gaussian noise on video (held-out test corruption)
+            return torch.cat([zv + torch.randn_like(zv) * zv.std(), za], dim=1)
+        if mode == "vid_scale":   # scale video to 50% (held-out test corruption)
+            return torch.cat([zv * 0.5, za], dim=1)
         raise ValueError(f"unknown ablation mode {mode!r}")
     return fn
 
@@ -370,17 +384,22 @@ def run_alabels(args):
     rng = random.Random(args.seed)
     idxs = sorted(rng.sample(range(len(ds)), min(args.num_samples, len(ds))))
 
-    # Only the TRAIN corruptions need empirical labels here. Held-out test
-    # corruptions (noise/scaling/frame-drop) are applied behaviorally at eval
-    # time and are deliberately never seen during labeling or training.
-    train_corrs = ["zero", "mean"]
-    conds = ["identity"] + train_corrs
+    # Per-modality corruptions: vid and aud variants separately.
+    # Train corruptions are vid_zero/vid_mean. aud_zero/aud_mean are also labeled
+    # (expected to be low-flip due to audio inertness) and serve as the negative
+    # contrast: if a question flips under vid_zero but NOT aud_zero, that confirms
+    # video-specific need. The training loop uses this contrast to teach sufficiency
+    # reasoning vs artifact detection.
+    corrs = ["vid_zero", "vid_mean", "aud_zero", "aud_mean"]
+    conds = ["identity"] + corrs
     print(f"Labeling {len(idxs)} candidates; conditions={conds}\n", flush=True)
 
     out = []
     n_id_correct = 0
-    flip_counts = {c: 0 for c in train_corrs}
-    n_abstainable = 0  # id-correct AND flips under at least one train corruption
+    flip_counts = {c: 0 for c in corrs}
+    n_video_abstainable = 0  # flips under vid_zero OR vid_mean
+    n_audio_abstainable = 0  # flips under aud_zero OR aud_mean
+    n_contrast = 0           # flips video but NOT audio -> clean sufficiency signal
 
     for s, i in enumerate(idxs):
         rec = ds[i]
@@ -402,39 +421,52 @@ def run_alabels(args):
 
         id_ok = preds["identity"]
         n_id_correct += int(id_ok)
-        # flip[c] = id correct AND corruption makes it wrong -> abstain is gold
-        flips = {c: bool(id_ok and not preds[c]) for c in train_corrs}
-        for c in train_corrs:
+        flips = {c: bool(id_ok and not preds[c]) for c in corrs}
+        for c in corrs:
             flip_counts[c] += int(flips[c])
-        if id_ok and any(flips.values()):
-            n_abstainable += 1
+
+        vid_flips = flips["vid_zero"] or flips["vid_mean"]
+        aud_flips = flips["aud_zero"] or flips["aud_mean"]
+        if id_ok and vid_flips:
+            n_video_abstainable += 1
+        if id_ok and aud_flips:
+            n_audio_abstainable += 1
+        if id_ok and vid_flips and not aud_flips:
+            n_contrast += 1
 
         if qid in raw_by_qid:
-            entry = dict(raw_by_qid[qid])  # raw MUSIC-AVQA fields, reusable
+            entry = dict(raw_by_qid[qid])
             entry["identity_correct"] = id_ok
-            entry["flips"] = flips        # {"zero": bool, "mean": bool}
+            entry["flips_vid_zero"] = flips["vid_zero"]
+            entry["flips_vid_mean"] = flips["vid_mean"]
+            entry["flips_aud_zero"] = flips["aud_zero"]
+            entry["flips_aud_mean"] = flips["aud_mean"]
             out.append(entry)
 
         if (s + 1) % args.every == 0:
             print(f"  [{s+1}/{len(idxs)}] id_correct={n_id_correct} "
-                  f"abstainable={n_abstainable}", flush=True)
+                  f"vid_abstainable={n_video_abstainable} "
+                  f"contrast(vid_not_aud)={n_contrast}", flush=True)
 
     n = len(idxs)
     print("\n" + "=" * 60)
-    print("ABSTAIN LABELS — empirical (flip = right->wrong under corruption)")
+    print("ABSTAIN LABELS — per-modality empirical flip labels")
     print("=" * 60)
     print(f"  candidates           : {n}")
     print(f"  identity-correct     : {n_id_correct} ({100.0*n_id_correct/max(n,1):.1f}%)")
-    for c in train_corrs:
-        print(f"  flips under {c:<8} : {flip_counts[c]} "
+    for c in corrs:
+        print(f"  flips under {c:<10}: {flip_counts[c]} "
               f"({100.0*flip_counts[c]/max(n,1):.1f}%)")
-    print(f"  abstainable (any)    : {n_abstainable} "
-          f"({100.0*n_abstainable/max(n,1):.1f}%)")
+    print(f"  video-abstainable    : {n_video_abstainable} ({100.0*n_video_abstainable/max(n,1):.1f}%)")
+    print(f"  audio-abstainable    : {n_audio_abstainable} ({100.0*n_audio_abstainable/max(n,1):.1f}%)")
+    print(f"  contrast(vid not aud): {n_contrast} ({100.0*n_contrast/max(n,1):.1f}%)")
+
     with open(args.out_json, "w") as f:
         json.dump(out, f, indent=2)
     print(f"\n  wrote {len(out)} labeled records -> {args.out_json}")
-    print("  (each has identity_correct + flips{zero,mean}; the train loop builds"
-          " clean->gold and flip->abstain pairs from these)")
+    print("  Fields: identity_correct, flips_vid_zero, flips_vid_mean,")
+    print("          flips_aud_zero, flips_aud_mean")
+    print("  Training: vid_flip->abstain / aud_flip->gold / no_flip->gold")
     print("=" * 60, flush=True)
 
 

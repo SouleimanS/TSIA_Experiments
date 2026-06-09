@@ -8,6 +8,7 @@ Architecture variants (all share: no joint VIB, SinkAwareVIB on video):
     b_topk_nofusion    SinkAwareVIB_v + NormTopKSinkVIB_a + direct concat
     b_topk_fusion_adavib   b_topk_fusion + per-sample adaptive beta
     b_topk_fusion_adavib2  same arch, different adaptive_beta_base hyperparam
+    b_video_only        SinkAwareVIB_v + identity passthrough audio (no audio VIB)
     a                  SinkAwareVIB_v + standard VIB_a + Fusion + SinkAwareVIB_joint
     c                  SinkAwareVIB_v + standard VIB_a + Fusion + standard VIB_joint
 
@@ -232,12 +233,19 @@ class NormTopKSinkVIB(nn.Module):
         return z, kl_nonsink + self.beta_sink_ratio * kl_sink, sink_mask
 
 
+class IdentityAudioPath(nn.Module):
+    """No-op audio path: passes audio tokens through unchanged, contributes zero KL."""
+    def forward(self, x: Tensor) -> Tuple[Tensor, Tensor, None]:
+        kl_zero = torch.zeros((), device=x.device, dtype=x.dtype)
+        return x, kl_zero, None
+
+
 # ---------------------------------------------------------------------------
 # AVModelV6
 # ---------------------------------------------------------------------------
 
 _B_VARIANTS = ("b_std_fusion", "b_topk_fusion", "b_std_nofusion", "b_topk_nofusion",
-               "b_topk_fusion_adavib", "b_topk_fusion_adavib2")
+               "b_topk_fusion_adavib", "b_topk_fusion_adavib2", "b_video_only")
 _ALL_VARIANTS = ("a", "c") + _B_VARIANTS
 
 
@@ -285,7 +293,8 @@ class AVModelV6(nn.Module):
 
         # Derived fusion/audio-vib flags from variant name
         self._use_topk_audio  = "topk" in variant
-        self._use_fusion      = "nofusion" not in variant and variant not in ("a", "c")
+        self._use_video_only  = variant == "b_video_only"
+        self._use_fusion      = "nofusion" not in variant and variant not in ("a", "c") and variant != "b_video_only"
         # variants a and c always use fusion (MCA)
         if variant in ("a", "c"):
             self._use_fusion = True
@@ -307,7 +316,9 @@ class AVModelV6(nn.Module):
         )
 
         # ── AUDIO VIB ────────────────────────────────────────────────
-        if self._use_topk_audio:
+        if self._use_video_only:
+            self.bottleneck_a = IdentityAudioPath()
+        elif self._use_topk_audio:
             self.bottleneck_a = NormTopKSinkVIB(
                 d_model=self.D_MODEL,
                 top_k_frac=0.40,
