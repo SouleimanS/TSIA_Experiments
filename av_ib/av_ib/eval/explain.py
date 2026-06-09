@@ -338,6 +338,107 @@ def run_avhard(args):
 
 
 # ---------------------------------------------------------------------------
+# ALABELS — emit EMPIRICAL abstention-training labels.
+# A (question, corruption) pair earns an `abstain` target only if the model is
+# RIGHT under identity and the corruption FLIPS it to wrong — a behavioral fact,
+# not the circular "we removed evidence so abstain is correct". Questions whose
+# answer survives a corruption keep the gold target under that corruption
+# (the robustness / don't-over-abstain direction). Prior-driven questions (zero
+# does not flip) therefore never get an abstain label, automatically.
+# ---------------------------------------------------------------------------
+def run_alabels(args):
+    from av_ib.model.av_model_v6 import AVModelV6
+    from av_ib.data.musicavqa import MusicAVQADataset
+    import random
+
+    tag = "untrained" if not args.ckpt_path else f"ckpt={args.ckpt_path}"
+    print(f"Building AVModelV6 (variant={args.variant}, {tag}) for abstain labels...",
+          flush=True)
+    model = AVModelV6(use_lora=bool(args.ckpt_path), variant=args.variant).eval()
+    model.set_sample_noise(False)
+    if args.ckpt_path:
+        sd = torch.load(args.ckpt_path, map_location="cpu")
+        if "trainable_state" in sd:
+            sd = sd["trainable_state"]
+        own = dict(model.named_parameters())
+        for k, v in sd.items():
+            if k in own:
+                own[k].data.copy_(v.data)
+
+    ds = MusicAVQADataset(args.ann_path, args.video_root)
+    raw_by_qid = {r["question_id"]: r for r in ds.records}
+    rng = random.Random(args.seed)
+    idxs = sorted(rng.sample(range(len(ds)), min(args.num_samples, len(ds))))
+
+    # Only the TRAIN corruptions need empirical labels here. Held-out test
+    # corruptions (noise/scaling/frame-drop) are applied behaviorally at eval
+    # time and are deliberately never seen during labeling or training.
+    train_corrs = ["zero", "mean"]
+    conds = ["identity"] + train_corrs
+    print(f"Labeling {len(idxs)} candidates; conditions={conds}\n", flush=True)
+
+    out = []
+    n_id_correct = 0
+    flip_counts = {c: 0 for c in train_corrs}
+    n_abstainable = 0  # id-correct AND flips under at least one train corruption
+
+    for s, i in enumerate(idxs):
+        rec = ds[i]
+        v, a, p = [rec["video_path"]], [rec["audio_path"]], [rec["prompt"]]
+        gold = _norm_answer(rec["answer"])
+        qid = rec.get("meta", {}).get("question_id")
+
+        preds = {}
+        for c in conds:
+            model.z_ablation = make_ablation(c)
+            try:
+                with torch.no_grad():
+                    g = model.forward_generate(v, a, p, max_new_tokens=5)[0]
+                preds[c] = (_norm_answer(g) == gold)
+            except Exception as e:
+                print(f"  [{s}] {c}: gen skip: {e}", flush=True)
+                preds[c] = False
+        model.z_ablation = None
+
+        id_ok = preds["identity"]
+        n_id_correct += int(id_ok)
+        # flip[c] = id correct AND corruption makes it wrong -> abstain is gold
+        flips = {c: bool(id_ok and not preds[c]) for c in train_corrs}
+        for c in train_corrs:
+            flip_counts[c] += int(flips[c])
+        if id_ok and any(flips.values()):
+            n_abstainable += 1
+
+        if qid in raw_by_qid:
+            entry = dict(raw_by_qid[qid])  # raw MUSIC-AVQA fields, reusable
+            entry["identity_correct"] = id_ok
+            entry["flips"] = flips        # {"zero": bool, "mean": bool}
+            out.append(entry)
+
+        if (s + 1) % args.every == 0:
+            print(f"  [{s+1}/{len(idxs)}] id_correct={n_id_correct} "
+                  f"abstainable={n_abstainable}", flush=True)
+
+    n = len(idxs)
+    print("\n" + "=" * 60)
+    print("ABSTAIN LABELS — empirical (flip = right->wrong under corruption)")
+    print("=" * 60)
+    print(f"  candidates           : {n}")
+    print(f"  identity-correct     : {n_id_correct} ({100.0*n_id_correct/max(n,1):.1f}%)")
+    for c in train_corrs:
+        print(f"  flips under {c:<8} : {flip_counts[c]} "
+              f"({100.0*flip_counts[c]/max(n,1):.1f}%)")
+    print(f"  abstainable (any)    : {n_abstainable} "
+          f"({100.0*n_abstainable/max(n,1):.1f}%)")
+    with open(args.out_json, "w") as f:
+        json.dump(out, f, indent=2)
+    print(f"\n  wrote {len(out)} labeled records -> {args.out_json}")
+    print("  (each has identity_correct + flips{zero,mean}; the train loop builds"
+          " clean->gold and flip->abstain pairs from these)")
+    print("=" * 60, flush=True)
+
+
+# ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description="AVModelV6 explainability instrument")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -368,6 +469,21 @@ def main():
     mh.add_argument("--every", type=int, default=20)
     mh.add_argument("--out-json", default="runs/avhard_subset.json")
     mh.set_defaults(func=run_avhard)
+
+    al = sub.add_parser("alabels", help="Emit empirical abstention-training labels")
+    al.add_argument("--ann-path", required=True)
+    al.add_argument("--video-root", required=True)
+    al.add_argument("--variant", default="b_topk_nofusion")
+    al.add_argument("--ckpt-path", default=None,
+                    help="Default: untrained vanilla model (label with the model "
+                         "we will actually fine-tune from).")
+    al.add_argument("--num-samples", type=int, default=3000,
+                    help="Candidates to scan; abstainable yield is a fraction.")
+    al.add_argument("--seed", type=int, default=42,
+                    help="Use the TRAIN seed so labels cover the training pool.")
+    al.add_argument("--every", type=int, default=50)
+    al.add_argument("--out-json", default="runs/abstain_labels.json")
+    al.set_defaults(func=run_alabels)
 
     args = ap.parse_args()
     args.func(args)
