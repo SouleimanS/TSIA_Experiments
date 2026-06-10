@@ -447,6 +447,64 @@ output. This requires re-mining labels with upstream corruption.\\[4pt]
 \end{frame}
 
 % =====================================================================
+\section{Mathematical foundation}
+
+\begin{frame}{Mathematical foundation --- four established pillars + one bridge}
+
+\begin{columns}[T]
+\begin{column}{0.5\textwidth}
+
+\begin{block}{1.\ The module \emph{is} a variational IB}
+{\footnotesize
+$\min\ I(X_v;Z_v)-\beta\,I(Z_v;Y)$; trained as
+$\mathcal{L}=\text{NLL}+\beta\,D_{\mathrm{KL}}(p(z|x)\|\,\mathcal N(0,I))$.
+\textbf{$\mathrm{KL}_v$ is the rate} $I(X_v;Z_v)$, so the acc-vs-$\mathrm{KL}_v$
+table is an \emph{information curve}. [Tishby '00; Alemi '17]}
+\end{block}
+
+\begin{block}{2.\ The diagnosis is a conditional-MI fact}
+{\footnotesize
+Drop-audio $+8.3$\,\% NLL $\Rightarrow I(X_a;Y\,|\,X_v,Q)\!\approx\!0$;
+drop-both still $65$\,\% $\Rightarrow I(A,V;Y|Q)\!\ll\!H(Y|Q)$. An IB maximises
+$I(Z;Y)$ --- here the prior already does, so accuracy can't validate it.
+[Fischer '20; Mai '22]}
+\end{block}
+
+\end{column}
+
+\begin{column}{0.5\textwidth}
+
+\begin{block}{3.\ Fail-safe $=$ selective prediction}
+{\footnotesize
+Gate $(f,g)$: coverage $\varphi=\mathbb E[g]$, risk
+$R=\mathbb E[\ell\,g]/\varphi$; Chow's rule abstains when
+$\max_y p(y|x)<\theta$. Our risk--coverage eval is exactly this.
+[El-Yaniv--Wiener '10; Chow '70]}
+\end{block}
+
+\begin{block}{4.\ DPO installs the gate (KL-regularised)}
+{\footnotesize
+$\mathcal L_{\mathrm DPO}=-\log\sigma\big(\beta[\log\tfrac{\pi_\theta(y_w)}{\pi_{\mathrm{ref}}(y_w)}-\log\tfrac{\pi_\theta(y_l)}{\pi_{\mathrm{ref}}(y_l)}]\big)$
+--- optimum of KL-constrained reward max. [Rafailov '23]}
+\end{block}
+
+\end{column}
+\end{columns}
+
+\vspace{2pt}
+\begin{block}{The bridge (our claim) + its validity condition}
+{\footnotesize
+\textbf{Rate $\Rightarrow$ gate:} corrupt the essential evidence $\to$ code
+loses information $\to$ posterior flattens ($\max_y p(y|Z)\!\downarrow$) $\to$
+Chow abstains. \textbf{Valid only if} corruption enters \emph{upstream} of the
+VIB: by the data-processing inequality $X\!\to\!Z\!\to\!\hat Y$, downstream
+corruption leaves $\partial\mathcal L/\partial\theta_{\mathrm{VIB}}=0$ (the
+zero-gradient we observed). That is the open issue, stated precisely.}
+\end{block}
+
+\end{frame}
+
+% =====================================================================
 \section{Next steps}
 
 \begin{frame}{Next steps}
