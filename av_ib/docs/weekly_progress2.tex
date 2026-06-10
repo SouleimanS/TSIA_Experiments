@@ -52,13 +52,6 @@
 
 \begin{frame}{What I did this week}
 
-\begin{block}{Diagnosed \emph{why} the model ignores audio --- it's the benchmark}
-  Causal per-modality ablation on MUSIC-AVQA: removing audio barely changes the
-  model's answer ($+8.3$\,\% NLL, accuracy $65\to62.5$\,\%), and only
-  $\sim$0.5\,\% of questions are genuinely audio-visual. The benchmark
-  structurally \textbf{cannot} test an AV bottleneck.
-\end{block}
-
 \begin{block}{Found the best way to bottleneck: frozen LLM + bottleneck only (no LoRA)}
   At matched compression, a bottleneck-only model (no LoRA) beats
   LoRA$+$bottleneck (84\,\% vs 80\,\%) and costs only $\sim$2\,pp vs.\ the
@@ -66,62 +59,18 @@
   good \emph{lossy filter}.
 \end{block}
 
+\begin{block}{But then: \emph{why} does the model ignore audio? --- it's the benchmark}
+  Causal per-modality ablation on MUSIC-AVQA: removing audio barely changes the
+  model's answer ($+8.3$\,\% NLL, accuracy $65\to62.5$\,\%), and only
+  $\sim$0.5\,\% of questions are genuinely audio-visual. The benchmark
+  structurally \textbf{cannot} test an AV bottleneck --- so the accuracy numbers
+  are the wrong yardstick.
+\end{block}
+
 \begin{block}{Tested fail-safety on AVHBench --- and it regressed}
   the model became \textbf{more credulous} (Video-driven Audio Hallucination
   $-8.3$\,pp). A lossy filter is not a safety mechanism. $\Rightarrow$ pivot to
   an explicit \textbf{fail-safe abstention} experiment (SFT vs DPO), now running.
-\end{block}
-
-\end{frame}
-
-% =====================================================================
-\section{Diagnosis}
-
-\begin{frame}{MUSIC-AVQA cannot test an AV bottleneck}
-
-\begin{block}{The test (40 items, vanilla model)}
-{\footnotesize
-Delete one modality's tokens and measure how much worse the model predicts the
-correct answer ($\Delta$NLL). \textbf{If the answer barely degrades, the model
-never needed that modality.}}
-\end{block}
-
-\begin{columns}[T]
-\begin{column}{0.54\textwidth}
-\centering
-{\footnotesize
-\begin{tabular}{l l r r}
-\toprule
-\textbf{Delete} & \textbf{Left} & \textbf{$\Delta$NLL} & \textbf{Acc.} \\
-\midrule
-nothing \emph{(ref.)} & audio+video & --- & 65.0\,\% \\
-\rowcolor{paperD!12}
-\textbf{audio} & video only & \textbf{$+8.3$\,\%} & 62.5\,\% \\
-video & audio only & $+57.5$\,\% & 57.5\,\% \\
-both \emph{(zero)} & nothing & $+48.7$\,\% & 65.0\,\% \\
-both \emph{(mean)} & nothing & $+29.7$\,\% & 35.0\,\% \\
-both \emph{(shuffle)} & nothing & $+6.3$\,\% & 57.5\,\% \\
-\bottomrule
-\end{tabular}}
-\end{column}
-
-\begin{column}{0.44\textwidth}
-\begin{block}{What we find}
-{\footnotesize
-Dropping \textbf{audio} costs almost nothing ($+8.3$\,\% NLL, $-2.5$\,pp
-accuracy) --- the model barely uses it. Removing \emph{both} streams still
-leaves accuracy at $65$\,\%, and only $\sim$\textbf{0.5\,\%} of questions are
-genuinely audio-visual.}
-\end{block}
-\end{column}
-\end{columns}
-
-\vspace{4pt}
-\begin{block}{Conclusion}
-{\footnotesize
-The ``audio-visual'' benchmark is solved from video $+$ language prior, with
-audio essentially inert, so it \textbf{cannot validate an audio-visual
-bottleneck} --- which is why we pivot the evaluation (next slides).}
 \end{block}
 
 \end{frame}
@@ -200,14 +149,66 @@ bottleneck has no task signal to learn, so we leave audio untouched.}
 \end{columns}
 
 \vspace{2pt}
-\begin{block}{Why keep studying the bottleneck if plain LoRA scores higher?}
+\begin{block}{Puzzle: plain LoRA wins, and the bottleneck \emph{costs} accuracy}
 {\footnotesize
-Accuracy on this benchmark is the \emph{wrong} yardstick --- slide~3 showed it
-doesn't need audio-visual evidence, so 86\,\% vs 84\,\% measures the prior, not
-grounding. The bottleneck's value is a \textbf{controllable information rate}: it
-discards $2.6\times$ of the video signal for $\sim$2\,pp, and --- the real goal
---- gives an explicit knob for \textbf{fail-safe behaviour} (abstain when
-evidence is corrupted). That is what the next slides test.}
+The uncompressed LoRA baseline (86\,\%) beats everything, and adding the
+bottleneck only lowers accuracy. So is the bottleneck useless? \textbf{Only if
+accuracy on this benchmark means what we think it does} --- which is exactly
+what we checked next.}
+\end{block}
+
+\end{frame}
+
+% =====================================================================
+\section{Diagnosis}
+
+\begin{frame}{Hold on --- MUSIC-AVQA cannot test an AV bottleneck}
+
+\begin{block}{The test (40 items, vanilla model)}
+{\footnotesize
+Delete one modality's tokens and measure how much worse the model predicts the
+correct answer ($\Delta$NLL). \textbf{If the answer barely degrades, the model
+never needed that modality.}}
+\end{block}
+
+\begin{columns}[T]
+\begin{column}{0.54\textwidth}
+\centering
+{\footnotesize
+\begin{tabular}{l l r r}
+\toprule
+\textbf{Delete} & \textbf{Left} & \textbf{$\Delta$NLL} & \textbf{Acc.} \\
+\midrule
+nothing \emph{(ref.)} & audio+video & --- & 65.0\,\% \\
+\rowcolor{paperD!12}
+\textbf{audio} & video only & \textbf{$+8.3$\,\%} & 62.5\,\% \\
+video & audio only & $+57.5$\,\% & 57.5\,\% \\
+both \emph{(zero)} & nothing & $+48.7$\,\% & 65.0\,\% \\
+both \emph{(mean)} & nothing & $+29.7$\,\% & 35.0\,\% \\
+both \emph{(shuffle)} & nothing & $+6.3$\,\% & 57.5\,\% \\
+\bottomrule
+\end{tabular}}
+\end{column}
+
+\begin{column}{0.44\textwidth}
+\begin{block}{What we find}
+{\footnotesize
+Dropping \textbf{audio} costs almost nothing ($+8.3$\,\% NLL, $-2.5$\,pp
+accuracy) --- the model barely uses it. Removing \emph{both} streams still
+leaves accuracy at $65$\,\%, and only $\sim$\textbf{0.5\,\%} of questions are
+genuinely audio-visual.}
+\end{block}
+\end{column}
+\end{columns}
+
+\vspace{4pt}
+\begin{block}{Conclusion --- so the 86\,\% vs 84\,\% was the wrong yardstick}
+{\footnotesize
+The benchmark is solved from video $+$ language prior, audio essentially inert,
+so accuracy here measures the prior, \emph{not} grounding --- it
+\textbf{cannot validate an audio-visual bottleneck}. The bottleneck's real value
+is a \textbf{controllable information rate} and an explicit knob for
+\textbf{fail-safe behaviour}. So we pivot the evaluation (next slides).}
 \end{block}
 
 \end{frame}
