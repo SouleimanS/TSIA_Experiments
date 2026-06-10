@@ -199,6 +199,17 @@ bottleneck has no task signal to learn, so we leave audio untouched.}
 \end{column}
 \end{columns}
 
+\vspace{2pt}
+\begin{block}{Why keep studying the bottleneck if plain LoRA scores higher?}
+{\footnotesize
+Accuracy on this benchmark is the \emph{wrong} yardstick --- slide~3 showed it
+doesn't need audio-visual evidence, so 86\,\% vs 84\,\% measures the prior, not
+grounding. The bottleneck's value is a \textbf{controllable information rate}: it
+discards $2.6\times$ of the video signal for $\sim$2\,pp, and --- the real goal
+--- gives an explicit knob for \textbf{fail-safe behaviour} (abstain when
+evidence is corrupted). That is what the next slides test.}
+\end{block}
+
 \end{frame}
 
 % =====================================================================
