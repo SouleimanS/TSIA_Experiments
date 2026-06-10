@@ -59,10 +59,11 @@
   structurally \textbf{cannot} test an AV bottleneck.
 \end{block}
 
-\begin{block}{Found the best architecture: frozen LLM + bottleneck only (no LoRA)}
-  A bottleneck-only model (no LoRA) beats every LoRA variant on held-out
-  accuracy and gives a clean rate--distortion curve. The bottleneck is a good
-  \emph{lossy filter}.
+\begin{block}{Found the best way to bottleneck: frozen LLM + bottleneck only (no LoRA)}
+  At matched compression, a bottleneck-only model (no LoRA) beats
+  LoRA$+$bottleneck (84\,\% vs 80\,\%) and costs only $\sim$2\,pp vs.\ the
+  uncompressed baseline for 2.6$\times$ video compression. The bottleneck is a
+  good \emph{lossy filter}.
 \end{block}
 
 \begin{block}{Tested fail-safety on AVHBench --- and it regressed}
@@ -128,7 +129,7 @@ bottleneck} --- which is why we pivot the evaluation (next slides).}
 % =====================================================================
 \section{Best configuration}
 
-\begin{frame}{Frozen LLM + bottleneck only is the best configuration}
+\begin{frame}{Frozen LLM + bottleneck only is the best way to bottleneck}
 
 \begin{columns}[T]
 \begin{column}{0.50\textwidth}
@@ -170,28 +171,29 @@ audio passes through untouched (it was inert anyway).}
 
 \begin{column}{0.47\textwidth}
 
-\begin{block}{Held-out accuracy}
+\begin{block}{Held-out accuracy (150 samples)}
 {\footnotesize
-\begin{tabular}{l r}
+\begin{tabular}{l r r}
 \toprule
-\textbf{Config} & \textbf{Acc.} \\
+\textbf{Config} & \textbf{Acc.} & \textbf{$\mathrm{KL}_v$} \\
 \midrule
-LoRA + bottleneck ($\beta$=7e-6) & 80\,\% \\
+LoRA, no bottleneck & 86.0\,\% & 12229 \\
 \rowcolor{paperD!12}
-\textbf{bottleneck only (no LoRA)}  & \textbf{84\,\%} \\
+\textbf{bottleneck only, no LoRA} & \textbf{84.0\,\%} & \textbf{4776} \\
+LoRA $+$ bottleneck & 80.0\,\% & 4710 \\
+untrained (vanilla) & 76.7\,\% & 12229 \\
 \bottomrule
 \end{tabular}}
 \end{block}
 
-\begin{block}{Clean rate--distortion curve}
+\begin{block}{What the numbers say}
 {\footnotesize
-Video channel rate $\mathrm{KL}_v$: $10779 \to 4103$ over training
-(\textbf{2.6$\times$ compression}) at near-constant accuracy.\\[3pt]
-Meanwhile the audio rate is \emph{stuck}: $\mathrm{KL}_a$ $494 \to 486$ --- the
-audio bottleneck has nothing to learn (no task signal), so we leave audio
-untouched.\\[3pt]
-\textbf{Takeaway:} freezing the LLM and letting \emph{only} the bottleneck learn
-is both simpler and better.}
+At \emph{matched} compression ($\mathrm{KL}_v\approx4.7$k), bottleneck-only on a
+frozen LLM (84\,\%) beats LoRA$+$bottleneck (80\,\%) --- so freezing the LLM is
+the best \emph{way to add} a bottleneck. It costs only $\sim$2\,pp vs.\ the
+uncompressed baseline for \textbf{2.6$\times$} video compression.\\[3pt]
+Audio rate is \emph{stuck} ($\mathrm{KL}_a$ $494\to486$ in training): the audio
+bottleneck has no task signal to learn, so we leave audio untouched.}
 \end{block}
 
 \end{column}
