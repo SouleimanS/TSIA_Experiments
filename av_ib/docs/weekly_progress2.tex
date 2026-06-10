@@ -185,10 +185,11 @@ LoRA + bottleneck ($\beta$=7e-6) & 80\,\% \\
 
 \begin{block}{Clean rate--distortion curve}
 {\footnotesize
-Video channel rate $\mathrm{KL}_v$: $12229 \to 4776$
-(\textbf{2.6$\times$ compression}) costs only $\sim$2\,pp accuracy.\\[3pt]
-Monotone: more compression $\Rightarrow$ lower accuracy, higher NLL.
-The bottleneck behaves exactly as an information filter should.\\[3pt]
+Video channel rate $\mathrm{KL}_v$: $10779 \to 4103$ over training
+(\textbf{2.6$\times$ compression}) at near-constant accuracy.\\[3pt]
+Meanwhile the audio rate is \emph{stuck}: $\mathrm{KL}_a$ $494 \to 486$ --- the
+audio bottleneck has nothing to learn (no task signal), so we leave audio
+untouched.\\[3pt]
 \textbf{Takeaway:} freezing the LLM and letting \emph{only} the bottleneck learn
 is both simpler and better.}
 \end{block}
