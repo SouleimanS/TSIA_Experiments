@@ -1,0 +1,469 @@
+% Compile with: pdflatex weekly_progress2.tex (run twice)
+
+\documentclass[10pt,aspectratio=169]{beamer}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath, amssymb}
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage[table]{xcolor}
+\usepackage{array}
+\usepackage{graphicx}
+
+\usetikzlibrary{positioning, shapes.geometric, arrows.meta, backgrounds, fit, calc}
+
+\usetheme{Madrid}
+\usecolortheme{seahorse}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{caption}[numbered]
+\setbeamerfont{frametitle}{size=\large}
+\setbeamerfont{title}{size=\Large}
+
+\definecolor{paperA}{RGB}{200,80,80}
+\definecolor{paperB}{RGB}{60,100,180}
+\definecolor{paperC}{RGB}{130,60,180}
+\definecolor{paperD}{RGB}{50,140,80}
+\definecolor{boxbg}{RGB}{240,240,250}
+\definecolor{frozenbg}{RGB}{220,220,220}
+\definecolor{trainedbg}{RGB}{255,235,205}
+\colorlet{accent}{paperB}
+
+\tikzstyle{block}  = [rectangle, draw, rounded corners, align=center,
+                      minimum height=0.8cm, minimum width=2.2cm, fill=boxbg]
+\tikzstyle{frozen} = [block, fill=frozenbg]
+\tikzstyle{trained}= [block, fill=trainedbg]
+\tikzstyle{arrow}  = [-{Stealth[length=2mm]}, thick]
+
+\title[av\_ib Weekly Progress]{Audio-Visual Information Bottleneck\\
+       \normalfont\normalsize Weekly Progress --- Causal Diagnosis, the T2 Result \& the Fail-Safe Pivot}
+\subtitle{}
+\author{}
+\institute{}
+\date{\today}
+
+\begin{document}
+
+\frame{\titlepage}
+
+% =====================================================================
+\section{This week}
+
+\begin{frame}{What I did this week}
+
+\begin{block}{Diagnosed \emph{why} the model ignores audio --- it's the benchmark (``Asset A'')}
+  Causal per-modality ablation (E1) on MUSIC-AVQA: only $\sim$0.5\,\% of
+  questions are genuinely audio-visual; $\sim$46.5\,\% are answerable from the
+  language prior alone. The benchmark structurally \textbf{cannot} test an AV
+  bottleneck.
+\end{block}
+
+\begin{block}{Found the best architecture: T2 = frozen LLM + VIB only (no LoRA)}
+  A bottleneck-only model (no LoRA) beats every LoRA variant on held-out
+  accuracy and gives a clean rate--distortion curve. The bottleneck is a good
+  \emph{lossy filter}.
+\end{block}
+
+\begin{block}{Tested fail-safety on AVHBench --- and it regressed}
+  T2 became \textbf{more credulous} (Video-driven Audio Hallucination
+  $-8.3$\,pp). A lossy filter is not a safety mechanism. $\Rightarrow$ pivot to
+  an explicit \textbf{fail-safe abstention} experiment (SFT vs DPO), now running.
+\end{block}
+
+\end{frame}
+
+% =====================================================================
+\section{Asset A}
+
+\begin{frame}{Asset A --- MUSIC-AVQA cannot test an AV bottleneck}
+
+\begin{columns}[T]
+\begin{column}{0.50\textwidth}
+
+\begin{block}{E1: causal per-modality ablation}
+{\footnotesize
+For each test item, replace the spliced tokens and measure the change:
+\begin{itemize}\setlength\itemsep{1pt}
+  \item \texttt{identity} --- reference
+  \item \texttt{video\_only} --- drop audio
+  \item \texttt{audio\_only} --- drop video
+  \item \texttt{zero\,/\,mean\,/\,shuffle} --- destroy both
+\end{itemize}
+If accuracy barely moves when a modality is removed, the model never needed it.}
+\end{block}
+
+\begin{block}{The numbers}
+{\footnotesize
+\begin{tabular}{l r}
+\toprule
+\textbf{Probe} & \textbf{Result} \\
+\midrule
+Prior-driven questions      & $\sim$46.5\,\% \\
+\rowcolor{paperD!12}
+Genuinely AV-essential      & $\sim$0.5\,\% \\
+Cost of dropping video (\texttt{video\_only}) & $+4.4$\,\% NLL \\
+Audio channel rate $\mathrm{KL}_a$ (all runs) & frozen $\sim$477 \\
+\bottomrule
+\end{tabular}}
+\end{block}
+
+\end{column}
+
+\begin{column}{0.47\textwidth}
+
+\begin{block}{Why this matters}
+{\footnotesize
+The visual-shortcut behaviour we flagged last week (AVHBench AV-Matching at
+50\,\%, audio $-2.7$\,pp) is not a model bug to be ``fixed'' by contrastive
+training --- it is the \textbf{rational solution} to a benchmark whose answers
+are mostly recoverable without audio.}
+\end{block}
+
+\begin{block}{External corroboration}
+{\footnotesize
+\textbf{Omni-R1} (MIT, on Qwen2.5-Omni) independently finds:
+\begin{itemize}\setlength\itemsep{1pt}
+  \item text-only fine-tuning \emph{improves} audio-benchmark accuracy;
+  \item audio-withheld inference shows gains come from better text reasoning.
+\end{itemize}
+Same disease, sibling model. Our contribution is the \textbf{causal,
+per-channel} version --- and a remedy.}
+\end{block}
+
+\end{column}
+\end{columns}
+
+\end{frame}
+
+% =====================================================================
+\section{T2}
+
+\begin{frame}{T2 --- frozen LLM + VIB only is the best configuration}
+
+\begin{columns}[T]
+\begin{column}{0.50\textwidth}
+\centering
+\scalebox{0.82}{%
+\begin{tikzpicture}[
+  font=\scriptsize,
+  >={Stealth[length=1.4mm,width=1.2mm]},
+  frz/.style={rectangle, rounded corners=2pt, draw=black!35,
+              fill=frozenbg, line width=0.5pt, align=center,
+              minimum width=28mm, minimum height=8mm, inner sep=3pt},
+  trn/.style={rectangle, rounded corners=2pt, draw=paperC!70,
+              fill=paperC!10, line width=0.5pt, align=center,
+              minimum width=28mm, minimum height=8mm, inner sep=3pt},
+  idn/.style={rectangle, rounded corners=2pt, draw=black!35,
+              fill=frozenbg, line width=0.5pt, align=center, dashed,
+              minimum width=28mm, minimum height=8mm, inner sep=3pt},
+  win/.style={rectangle, rounded corners=2pt, draw=paperD!80,
+              fill=paperD!15, line width=1.2pt, align=center,
+              minimum width=46mm, minimum height=8mm, inner sep=3pt},
+  arr/.style={->, line width=0.5pt, draw=black!55}
+]
+\node[frz] (venc) at (-2.0, 2.8) {Vision Enc.\ (frozen)};
+\node[frz] (aenc) at ( 2.0, 2.8) {Audio Enc.\ (frozen)};
+\node[trn] (vvib) at (-2.0, 1.5) {SinkAwareVIB\\[-1pt](video, trained)};
+\node[idn] (avib) at ( 2.0, 1.5) {IdentityAudioPath\\[-1pt](no-op, 0 KL)};
+\node[win] (splice) at (0, 0.2) {direct splice (no fusion, no joint VIB)};
+\node[frz] (llm)  at ( 0,  -1.2) {Qwen3-Omni LLM\\[-1pt]\textbf{frozen --- no LoRA}};
+\draw[arr] (venc)--(vvib); \draw[arr] (aenc)--(avib);
+\draw[arr] (vvib)--(splice);  \draw[arr] (avib)--(splice);
+\draw[arr] (splice)--(llm);
+\end{tikzpicture}}
+
+\vspace{2pt}
+{\footnotesize \textbf{Variant \texttt{b\_video\_only}}: only the video VIB trains;
+audio passes through untouched (it was inert anyway).}
+\end{column}
+
+\begin{column}{0.47\textwidth}
+
+\begin{block}{Held-out accuracy}
+{\footnotesize
+\begin{tabular}{l r}
+\toprule
+\textbf{Config} & \textbf{Acc.} \\
+\midrule
+gate3 (LoRA + VIB, $\beta$=7e-6) & 80\,\% \\
+\rowcolor{paperD!12}
+\textbf{T2 (VIB only, no LoRA)}  & \textbf{84\,\%} \\
+\bottomrule
+\end{tabular}}
+\end{block}
+
+\begin{block}{Clean rate--distortion curve}
+{\footnotesize
+Video channel rate $\mathrm{KL}_v$: $12229 \to 4776$
+(\textbf{2.6$\times$ compression}) costs only $\sim$2\,pp accuracy.\\[3pt]
+Monotone: more compression $\Rightarrow$ lower accuracy, higher NLL.
+The bottleneck behaves exactly as an information filter should.\\[3pt]
+\textbf{Takeaway:} freezing the LLM and letting \emph{only} the bottleneck learn
+is both simpler and better.}
+\end{block}
+
+\end{column}
+\end{columns}
+
+\end{frame}
+
+% =====================================================================
+\section{AVHBench}
+
+\begin{frame}{AVHBench --- the filter is not a fail-safe}
+
+\begin{columns}[T]
+\begin{column}{0.42\textwidth}
+
+\begin{block}{The test}
+{\footnotesize
+A good safety mechanism should \emph{refuse} (or hedge) when the evidence
+behind an answer is corrupted. We ran T2 vs vanilla on AVHBench
+(200 items) with focus on Video-driven Audio Hallucination --- the task where
+the model is asked to confirm audio content that has been replaced.}
+\end{block}
+
+\begin{block}{Result}
+{\footnotesize
+T2 $\approx$ vanilla overall, but on the hallucination task it got
+\textbf{worse}: it says ``yes'' to mismatched audio \emph{more} often.
+The bottleneck removed information without making the model aware that
+information was missing.}
+\end{block}
+
+\end{column}
+
+\begin{column}{0.55\textwidth}
+\scriptsize
+\begin{tabular}{l r r r}
+\toprule
+\textbf{Model} & \textbf{Overall} & \textbf{yes\%} & \textbf{$\Delta$} \\
+\midrule
+Vanilla   & 69.5\% & 38\% & --- \\
+\rowcolor{paperA!8}
+T2 (VIB only) & 67.5\% & 57\% & $-2.0$\,pp \\
+\bottomrule
+\end{tabular}
+
+\vspace{6pt}
+\begin{tabular}{l r r r}
+\toprule
+\textbf{Video-driven Audio Hall.} & \textbf{Base} & \textbf{T2} & \textbf{$\Delta$} \\
+\midrule
+\rowcolor{paperA!10}
+Accuracy & 69.8\% & 61.5\% & $-8.3$\,pp \\
+yes-rate & 38\% & 57\% & $+19$\,pp \\
+\bottomrule
+\end{tabular}
+
+\vspace{8pt}
+{\footnotesize
+\textbf{Diagnosis:} compression $\neq$ caution. To get fail-safe behaviour the
+model must be \emph{trained} to recognise corrupted evidence and abstain ---
+which motivates this week's pivot.}
+\end{column}
+\end{columns}
+
+\end{frame}
+
+% =====================================================================
+\section{Fail-safe pivot}
+
+\begin{frame}{The pivot --- fail-safe abstention (risk--coverage)}
+
+\begin{columns}[T]
+\begin{column}{0.50\textwidth}
+
+\begin{block}{Idea}
+{\footnotesize
+Teach the model to say \textbf{``I can't tell''} when its essential (video)
+evidence is corrupted, while still answering when evidence is intact.
+Measured by \textbf{risk--coverage}:
+\begin{itemize}\setlength\itemsep{1pt}
+  \item \textbf{coverage} = fraction of questions answered (not abstained)
+  \item \textbf{risk} = error rate \emph{on the answered subset}
+\end{itemize}
+A fail-safe model drops coverage under corruption while holding risk low.}
+\end{block}
+
+\begin{block}{Supervision (empirical label miner)}
+{\footnotesize
+Mined MUSIC-AVQA for items the model gets right under clean evidence but wrong
+when video is removed. Yield: \textbf{2815 preference pairs}\\
+(abstain 570, capability-anchor 2017, negative-control 228).}
+\end{block}
+
+\end{column}
+
+\begin{column}{0.47\textwidth}
+
+\begin{block}{Corruption taxonomy}
+{\footnotesize
+\begin{tabular}{l p{3.2cm}}
+\toprule
+\textbf{Group} & \textbf{Modes} \\
+\midrule
+Train (seen) & \texttt{vid\_zero}, \texttt{vid\_mean} \\
+\rowcolor{paperD!12}
+Held-out & \texttt{vid\_noise}, \texttt{vid\_scale} \\
+Neg.\ control & \texttt{aud\_zero}, \texttt{aud\_mean} \\
+\bottomrule
+\end{tabular}}
+\end{block}
+
+\begin{block}{The decisive test}
+{\footnotesize
+Generalisation to \textbf{held-out} corruptions never seen in training.
+Negative control checks the model does \emph{not} abstain when only the inert
+(audio) modality is degraded --- i.e.\ it preserves coverage.}
+\end{block}
+
+\end{column}
+\end{columns}
+
+\end{frame}
+
+% =====================================================================
+\section{SFT vs DPO}
+
+\begin{frame}{SFT vs DPO --- six conditions, head-to-head}
+
+\begin{columns}[T]
+\begin{column}{0.48\textwidth}
+
+\begin{block}{Why DPO (FINER, CVPR 2026)}
+{\footnotesize
+FINER shows MLLMs hallucinate ``yes'' under negative queries (content not
+present), and that \textbf{DPO $>$ SFT} for suppressing credulity \emph{while
+preserving} capability. Our AVHBench $-8.3$\,pp regression is the audio-visual
+analogue, so we test both losses on identical data.}
+\end{block}
+
+\begin{block}{Preference pairs (same for both losses)}
+{\footnotesize
+\begin{tabular}{l p{1.5cm} p{1.5cm}}
+\toprule
+\textbf{Kind} & \textbf{chosen} & \textbf{rejected} \\
+\midrule
+abstain (video removed) & ``I can't tell'' & gold \\
+anchor (intact) & gold & ``I can't tell'' \\
+neg-ctrl (audio only) & gold & ``I can't tell'' \\
+\bottomrule
+\end{tabular}}
+\end{block}
+
+\end{column}
+
+\begin{column}{0.48\textwidth}
+
+\begin{block}{Conditions}
+{\footnotesize
+\begin{tabular}{l p{4.0cm}}
+\toprule
+\textbf{C1} & vanilla + LoRA (no bottleneck) \\
+\rowcolor{paperC!8}
+\textbf{C2a} & VIB only, frozen LLM \\
+\textbf{C2b} & VIB + LoRA \\
+\bottomrule
+\end{tabular}
+\\[3pt]
+$\times$ \{SFT, DPO\} $=$ 6 runs, evaluated by risk--coverage on the same
+held-out set.}
+\end{block}
+
+\begin{block}{Status (on cluster, 8$\times$H200)}
+{\footnotesize
+Miner + Stage-0 free probe: \textbf{done}. SFT/DPO training: \textbf{running}
+(debugged through path + OOM fixes; model sharded across all GPUs).
+Eval chained to fire on completion.}
+\end{block}
+
+\end{column}
+\end{columns}
+
+\end{frame}
+
+% =====================================================================
+\section{Open issue}
+
+\begin{frame}{Open issue --- where the corruption is injected}
+
+\begin{columns}[T]
+\begin{column}{0.52\textwidth}
+
+\begin{block}{The problem}
+{\footnotesize
+Corruption is currently applied to the \emph{output} of the bottleneck
+($z_j$), downstream of the VIB:
+\begin{itemize}\setlength\itemsep{2pt}
+  \item \textbf{C1\,/\,C2b} (LoRA in the LLM, \emph{below} the corruption point):
+        the LLM sees the degraded tokens and can learn to abstain. \textcolor{paperD}{Trains fine.}
+  \item \textbf{C2a} (VIB only, frozen LLM): the VIB sits \emph{above} the
+        corruption and never observes it $\Rightarrow$ \texttt{vid\_zero}
+        gives \textbf{zero gradient}. \textcolor{paperA}{Structurally cannot fail-safe.}
+\end{itemize}}
+\end{block}
+
+\end{column}
+
+\begin{column}{0.46\textwidth}
+
+\begin{block}{The fix (pending decision)}
+{\footnotesize
+To fairly test the bottleneck hypothesis (degraded evidence in
+$\Rightarrow$ low-information code out $\Rightarrow$ frozen LLM abstains),
+the corruption must be injected \textbf{upstream of the VIB}, on the encoder
+output. This requires re-mining labels with upstream corruption.\\[4pt]
+\textbf{Note:} C1 and C2b results from the current run remain valid either way.}
+\end{block}
+
+\end{column}
+\end{columns}
+
+\begin{center}
+\scalebox{0.9}{%
+\begin{tikzpicture}[font=\scriptsize, >={Stealth[length=1.4mm]},
+  b/.style={rectangle, rounded corners=2pt, draw=black!40, fill=boxbg,
+            minimum height=7mm, minimum width=20mm, align=center},
+  bad/.style={b, draw=paperA!70, fill=paperA!10},
+  good/.style={b, draw=paperD!70, fill=paperD!12},
+  arr/.style={->, line width=0.6pt, draw=black!60}]
+\node[b] (enc) {encoder out};
+\node[good, right=8mm of enc] (up) {\textbf{upstream}\\corruption (fix)};
+\node[b, right=8mm of up] (vib) {VIB};
+\node[bad, right=8mm of vib] (down) {\textbf{downstream}\\corruption (now)};
+\node[b, right=8mm of down] (llm) {frozen LLM};
+\draw[arr] (enc)--(up); \draw[arr] (up)--(vib); \draw[arr] (vib)--(down); \draw[arr] (down)--(llm);
+\end{tikzpicture}}
+\end{center}
+
+\end{frame}
+
+% =====================================================================
+\section{Next steps}
+
+\begin{frame}{Next steps}
+
+\begin{block}{1.\ Decide corruption placement, then finish the 6-way comparison}
+  Resolve the upstream-vs-downstream question; relabel if needed. Then read
+  risk--coverage on held-out corruptions: does the bottleneck (C2) generalise
+  fail-safety better than LoRA alone (C1)?
+\end{block}
+
+\begin{block}{2.\ Transfer the winner to AVHBench}
+  Run the best abstention model on the Video-driven Audio Hallucination task
+  (the $-8.3$\,pp regression) --- the real out-of-distribution test of fail-safety.
+\end{block}
+
+\begin{block}{3.\ Decide the deliverable}
+  \begin{itemize}\setlength\itemsep{2pt}
+    \item C2 $\gg$ C1 on held-out $\Rightarrow$ bottleneck buys fail-safe generalisation. \textbf{Ship the method.}
+    \item C2 $\approx$ C1 $\Rightarrow$ bottleneck not needed; DPO alone fixes it. \textbf{Ship Asset A + simpler remedy.}
+    \item all $\approx$ baseline $\Rightarrow$ \textbf{ship Asset A} (the evaluation-pathology finding) alone.
+  \end{itemize}
+\end{block}
+
+\end{frame}
+
+\end{document}
