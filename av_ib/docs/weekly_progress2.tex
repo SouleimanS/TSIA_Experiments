@@ -137,12 +137,16 @@ untrained (vanilla) & 76.7\,\% & 12229 \\
 
 \begin{block}{What the numbers say}
 {\footnotesize
-At \emph{matched} compression ($\mathrm{KL}_v\approx4.7$k), bottleneck-only on a
-frozen LLM (84\,\%) beats LoRA$+$bottleneck (80\,\%) --- so freezing the LLM is
-the best \emph{way to add} a bottleneck. It costs only $\sim$2\,pp vs.\ the
-uncompressed baseline for \textbf{2.6$\times$} video compression.\\[3pt]
-Audio rate is \emph{stuck} ($\mathrm{KL}_a$ $494\to486$ in training): the audio
-bottleneck has no task signal to learn, so we leave audio untouched.}
+We train $\mathcal L=\text{NLL}+\beta\,\mathrm{KL}_v$ with
+$\mathrm{KL}_v=\tfrac12\sum_j(\mu_j^2+\sigma_j^2-1-\log\sigma_j^2)$. This
+$\mathrm{KL}_v$ \emph{is} the code's information rate $I(X_v;Z_v)$, so the
+acc-vs-$\mathrm{KL}_v$ table is a \textbf{rate--distortion curve}: raising
+$\beta$ lowers the rate ($12229\!\to\!4710\!\to\!2301$) and accuracy falls
+monotonically. At matched rate, freezing the LLM (84\,\%) beats LoRA$+$bottleneck
+(80\,\%); $2.6\times$ compression costs $\sim$2\,pp.\\[3pt]
+Audio is \emph{stuck} at $\mathrm{KL}_a\!\approx\!490$: with
+$I(X_a;Y\,|\,X_v)\!\approx\!0$ there is no relevance gradient to trade against
+its rate, so nothing trains --- we leave audio untouched.}
 \end{block}
 
 \end{column}
@@ -204,11 +208,13 @@ genuinely audio-visual.}
 \vspace{4pt}
 \begin{block}{Conclusion --- so the 86\,\% vs 84\,\% was the wrong yardstick}
 {\footnotesize
-The benchmark is solved from video $+$ language prior, audio essentially inert,
-so accuracy here measures the prior, \emph{not} grounding --- it
-\textbf{cannot validate an audio-visual bottleneck}. The bottleneck's real value
-is a \textbf{controllable information rate} and an explicit knob for
-\textbf{fail-safe behaviour}. So we pivot the evaluation (next slides).}
+Read as mutual information: drop-audio costs almost nothing
+$\Rightarrow I(X_a;Y\,|\,X_v,Q)\!\approx\!0$; drop-\emph{both} still scores
+$65$\,\% $\Rightarrow I(X_a,X_v;Y\,|\,Q)\!\ll\!H(Y\,|\,Q)$, i.e.\ the answer is
+fixed by the prior on the question. A bottleneck only ever maximises $I(Z;Y)$ ---
+but here that is already satisfied without audio-visual evidence, so accuracy
+\textbf{cannot validate it}. The real payoff is a controllable rate $+$ a
+\textbf{fail-safe} knob. So we pivot the evaluation.}
 \end{block}
 
 \end{frame}
@@ -264,9 +270,12 @@ yes-rate & 38\% & 57\% & $+19$\,pp \\
 
 \vspace{8pt}
 {\footnotesize
-\textbf{Diagnosis:} compression $\neq$ caution. To get fail-safe behaviour the
-model must be \emph{trained} to recognise corrupted evidence and abstain ---
-which motivates this week's pivot.}
+\textbf{What is happening:} caution would require the posterior to \emph{flatten}
+when evidence is weak ($\max_y p(y|x)\!\downarrow$). Instead, discarding evidence
+makes the answer regress toward the unconditional prior
+$p(y)$ --- and here the credulous default is ``yes,'' so the yes-rate climbs
+$38\!\to\!57$\,\%. \textbf{Compression moves the model toward its prior, not
+toward abstention.} Fail-safety must therefore be \emph{trained}, not assumed.}
 \end{column}
 \end{columns}
 
@@ -280,16 +289,17 @@ which motivates this week's pivot.}
 \begin{columns}[T]
 \begin{column}{0.50\textwidth}
 
-\begin{block}{Idea}
+\begin{block}{Idea --- a gate $g$ on top of the predictor $f$}
 {\footnotesize
-Teach the model to say \textbf{``I can't tell''} when its essential (video)
-evidence is corrupted, while still answering when evidence is intact.
-Measured by \textbf{risk--coverage}:
-\begin{itemize}\setlength\itemsep{1pt}
-  \item \textbf{coverage} = fraction of questions answered (not abstained)
-  \item \textbf{risk} = error rate \emph{on the answered subset}
-\end{itemize}
-A fail-safe model drops coverage under corruption while holding risk low.}
+Answer $f(x)$ when the gate $g(x)\!=\!1$, else say \textbf{``I can't tell.''}
+Score by \textbf{risk--coverage}:
+\[
+\varphi=\mathbb E[g(x)],\qquad
+R=\frac{\mathbb E[\ell(f(x),y)\,g(x)]}{\varphi}.
+\]
+The optimal gate answers only on high confidence:
+$g(x)=\mathbf 1[\max_y p(y|x)\!\ge\!\theta]$. A fail-safe model drops coverage
+$\varphi$ under corruption while holding risk $R$ low.}
 \end{block}
 
 \begin{block}{Supervision (empirical label miner)}
@@ -337,12 +347,18 @@ Negative control checks the model does \emph{not} abstain when only the inert
 \begin{columns}[T]
 \begin{column}{0.48\textwidth}
 
-\begin{block}{Why DPO (FINER, CVPR 2026)}
+\begin{block}{Two losses, same data}
 {\footnotesize
-FINER shows MLLMs hallucinate ``yes'' under negative queries (content not
-present), and that \textbf{DPO $>$ SFT} for suppressing credulity \emph{while
-preserving} capability. Our AVHBench $-8.3$\,pp regression is the audio-visual
-analogue, so we test both losses on identical data.}
+\textbf{SFT} just minimises NLL of the preferred response:
+$\mathcal L_{\text{SFT}}=-\log\pi_\theta(y_w|x)$ --- absolute, no leash to the
+base model. \textbf{DPO} optimises the \emph{margin} under a KL leash to the
+frozen reference $\pi_{\text{ref}}$:
+\[
+\mathcal L_{\text{DPO}}=-\log\sigma\!\Big(\beta\big[\log\tfrac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)}-\log\tfrac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\big]\Big).
+\]
+The $\pi_{\text{ref}}$ term is why DPO can suppress the credulous ``yes''
+\emph{without} drifting from the base model's capability --- the failure mode SFT
+risks.}
 \end{block}
 
 \begin{block}{Preference pairs (same for both losses)}
@@ -397,17 +413,18 @@ Eval chained to fire on completion.}
 \begin{columns}[T]
 \begin{column}{0.52\textwidth}
 
-\begin{block}{The problem}
+\begin{block}{The problem --- a data-processing argument}
 {\footnotesize
-Corruption is currently applied to the \emph{output} of the bottleneck
-($z_j$), downstream of the VIB:
+The signal path is $X_v\!\to\!Z_v\!\to\!\hat Y$. Corruption $c$ is currently
+applied to the code $Z_v$ (downstream of the VIB):
 \begin{itemize}\setlength\itemsep{2pt}
-  \item \textbf{LoRA conditions} (LoRA in the LLM, \emph{below} the corruption
-        point): the LLM sees the degraded tokens and can learn to abstain.
+  \item \textbf{LoRA conditions} (adapters \emph{below} $c$): the LLM sees the
+        degraded tokens, so $\partial\mathcal L/\partial\theta_{\text{LoRA}}\!\neq\!0$.
         \textcolor{paperD}{Trains fine.}
-  \item \textbf{Bottleneck-only} (frozen LLM): the VIB sits \emph{above} the
-        corruption and never observes it $\Rightarrow$ \texttt{vid\_zero}
-        gives \textbf{zero gradient}. \textcolor{paperA}{Structurally cannot fail-safe.}
+  \item \textbf{Bottleneck-only} (frozen LLM): $Z_v$ is computed \emph{before}
+        $c$, so the VIB never sees it $\Rightarrow
+        \partial\mathcal L/\partial\theta_{\text{VIB}}\!=\!0$ on \texttt{vid\_zero}
+        (the $\text{gn}\!=\!0$ we logged). \textcolor{paperA}{Structurally cannot fail-safe.}
 \end{itemize}}
 \end{block}
 
@@ -443,64 +460,6 @@ output. This requires re-mining labels with upstream corruption.\\[4pt]
 \draw[arr] (enc)--(up); \draw[arr] (up)--(vib); \draw[arr] (vib)--(down); \draw[arr] (down)--(llm);
 \end{tikzpicture}}
 \end{center}
-
-\end{frame}
-
-% =====================================================================
-\section{Mathematical foundation}
-
-\begin{frame}{Mathematical foundation --- four established pillars + one bridge}
-
-\begin{columns}[T]
-\begin{column}{0.5\textwidth}
-
-\begin{block}{1.\ The module \emph{is} a variational IB}
-{\footnotesize
-$\min\ I(X_v;Z_v)-\beta\,I(Z_v;Y)$; trained as
-$\mathcal{L}=\text{NLL}+\beta\,D_{\mathrm{KL}}(p(z|x)\|\,\mathcal N(0,I))$.
-\textbf{$\mathrm{KL}_v$ is the rate} $I(X_v;Z_v)$, so the acc-vs-$\mathrm{KL}_v$
-table is an \emph{information curve}. [Tishby '00; Alemi '17]}
-\end{block}
-
-\begin{block}{2.\ The diagnosis is a conditional-MI fact}
-{\footnotesize
-Drop-audio $+8.3$\,\% NLL $\Rightarrow I(X_a;Y\,|\,X_v,Q)\!\approx\!0$;
-drop-both still $65$\,\% $\Rightarrow I(A,V;Y|Q)\!\ll\!H(Y|Q)$. An IB maximises
-$I(Z;Y)$ --- here the prior already does, so accuracy can't validate it.
-[Fischer '20; Mai '22]}
-\end{block}
-
-\end{column}
-
-\begin{column}{0.5\textwidth}
-
-\begin{block}{3.\ Fail-safe $=$ selective prediction}
-{\footnotesize
-Gate $(f,g)$: coverage $\varphi=\mathbb E[g]$, risk
-$R=\mathbb E[\ell\,g]/\varphi$; Chow's rule abstains when
-$\max_y p(y|x)<\theta$. Our risk--coverage eval is exactly this.
-[El-Yaniv--Wiener '10; Chow '70]}
-\end{block}
-
-\begin{block}{4.\ DPO installs the gate (KL-regularised)}
-{\footnotesize
-$\mathcal L_{\mathrm DPO}=-\log\sigma\big(\beta[\log\tfrac{\pi_\theta(y_w)}{\pi_{\mathrm{ref}}(y_w)}-\log\tfrac{\pi_\theta(y_l)}{\pi_{\mathrm{ref}}(y_l)}]\big)$
---- optimum of KL-constrained reward max. [Rafailov '23]}
-\end{block}
-
-\end{column}
-\end{columns}
-
-\vspace{2pt}
-\begin{block}{The bridge (our claim) + its validity condition}
-{\footnotesize
-\textbf{Rate $\Rightarrow$ gate:} corrupt the essential evidence $\to$ code
-loses information $\to$ posterior flattens ($\max_y p(y|Z)\!\downarrow$) $\to$
-Chow abstains. \textbf{Valid only if} corruption enters \emph{upstream} of the
-VIB: by the data-processing inequality $X\!\to\!Z\!\to\!\hat Y$, downstream
-corruption leaves $\partial\mathcal L/\partial\theta_{\mathrm{VIB}}=0$ (the
-zero-gradient we observed). That is the open issue, stated precisely.}
-\end{block}
 
 \end{frame}
 
