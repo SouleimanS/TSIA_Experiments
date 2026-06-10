@@ -126,9 +126,9 @@ bottleneck} --- which is why we pivot the evaluation (next slides).}
 \end{frame}
 
 % =====================================================================
-\section{T2}
+\section{Best configuration}
 
-\begin{frame}{T2 --- frozen LLM + VIB only is the best configuration}
+\begin{frame}{Frozen LLM + bottleneck only is the best configuration}
 
 \begin{columns}[T]
 \begin{column}{0.50\textwidth}
@@ -163,7 +163,7 @@ bottleneck} --- which is why we pivot the evaluation (next slides).}
 \end{tikzpicture}}
 
 \vspace{2pt}
-{\footnotesize \textbf{Variant \texttt{b\_video\_only}}: only the video VIB trains;
+{\footnotesize \textbf{Video-only bottleneck}: only the video VIB trains;
 audio passes through untouched (it was inert anyway).}
 \end{column}
 
@@ -175,9 +175,9 @@ audio passes through untouched (it was inert anyway).}
 \toprule
 \textbf{Config} & \textbf{Acc.} \\
 \midrule
-gate3 (LoRA + VIB, $\beta$=7e-6) & 80\,\% \\
+LoRA + bottleneck ($\beta$=7e-6) & 80\,\% \\
 \rowcolor{paperD!12}
-\textbf{T2 (VIB only, no LoRA)}  & \textbf{84\,\%} \\
+\textbf{bottleneck only (no LoRA)}  & \textbf{84\,\%} \\
 \bottomrule
 \end{tabular}}
 \end{block}
