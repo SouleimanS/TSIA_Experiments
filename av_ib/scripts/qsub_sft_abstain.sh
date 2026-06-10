@@ -19,7 +19,10 @@ nvidia-smi -L
 source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
 conda activate av_ib
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
-export CUDA_VISIBLE_DEVICES=0
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# No CUDA_VISIBLE_DEVICES pin: let device_map="auto" shard the 31.7B model
+# across all 8 H200s (training needs the headroom; the C-MIB provider migrates
+# VIB tensors to the encoder-output device, so cross-GPU sharding is fine).
 
 LABELS="$PBS_O_WORKDIR/runs/abstain_labels.json"
 VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/MUSIC-AVQA/videos/all"
