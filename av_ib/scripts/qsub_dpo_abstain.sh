@@ -22,6 +22,7 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
 export CUDA_VISIBLE_DEVICES=0   # VIB hooks need same-device tensors
 
 LABELS="$PBS_O_WORKDIR/runs/abstain_labels.json"
+VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/MUSIC-AVQA/videos/all"
 
 # GATE: only run after (1) Stage-0 shows the abstain prompt alone does NOT
 # already fail-safe, and (2) the miner produced abstain_labels.json with enough
@@ -36,7 +37,7 @@ fi
 # ── C2a-DPO: b_video_only VIB-only (frozen LLM) + DPO ──
 echo "=== C2a-DPO | b_video_only | VIB-only (no LoRA) | beta_dpo=0.1 ==="
 python -u -m av_ib.train.train_dpo \
-    --labels-json "$LABELS" \
+    --labels-json "$LABELS" --video-root "$VIDEO_ROOT" \
     --variant b_video_only \
     --num-steps 400 --beta-dpo 0.1 --lr 5e-5 --anchor-ratio 1.0 \
     --log-path runs/dpo/c2a_dpo.jsonl \
@@ -45,7 +46,7 @@ python -u -m av_ib.train.train_dpo \
 # ── C1-DPO: vanilla + LoRA (VIB frozen) + DPO — the no-bottleneck baseline ──
 echo "=== C1-DPO | vanilla + LoRA | VIB frozen | beta_dpo=0.1 ==="
 python -u -m av_ib.train.train_dpo \
-    --labels-json "$LABELS" \
+    --labels-json "$LABELS" --video-root "$VIDEO_ROOT" \
     --variant b_video_only --use-lora --freeze-vib \
     --num-steps 400 --beta-dpo 0.1 --lr 5e-5 --anchor-ratio 1.0 \
     --log-path runs/dpo/c1_dpo.jsonl \
@@ -54,7 +55,7 @@ python -u -m av_ib.train.train_dpo \
 # ── C2b-DPO: b_video_only + LoRA + DPO ──
 echo "=== C2b-DPO | b_video_only + LoRA | beta_dpo=0.1 ==="
 python -u -m av_ib.train.train_dpo \
-    --labels-json "$LABELS" \
+    --labels-json "$LABELS" --video-root "$VIDEO_ROOT" \
     --variant b_video_only --use-lora \
     --num-steps 400 --beta-dpo 0.1 --lr 5e-5 --anchor-ratio 1.0 \
     --log-path runs/dpo/c2b_dpo.jsonl \

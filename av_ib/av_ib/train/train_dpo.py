@@ -112,6 +112,7 @@ def main(args):
 
     ds = PreferencePairDataset(
         args.labels_json,
+        args.video_root,
         include_anchor=not args.no_anchor,
         include_negctrl=not args.no_negctrl,
         anchor_ratio=args.anchor_ratio,
@@ -191,6 +192,8 @@ def main(args):
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--labels-json", required=True)
+    p.add_argument("--video-root", required=True,
+                   help="Directory with <video_id>.mp4 files (to rebuild paths)")
     p.add_argument("--variant", default="b_video_only")
     p.add_argument("--use-lora", action="store_true", default=False)
     p.add_argument("--freeze-vib", action="store_true", default=False,

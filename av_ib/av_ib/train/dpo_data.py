@@ -35,24 +35,31 @@ ABSTAIN_PROMPT_SUFFIX = (
 
 
 def _gold_of(rec: dict) -> str:
-    """Raw MUSIC-AVQA record -> gold answer string."""
-    for k in ("answer", "anser", "gold"):
+    """Raw MUSIC-AVQA record -> gold answer string. Note: the raw schema spells
+    the answer field 'anser'."""
+    for k in ("anser", "answer", "gold"):
         if k in rec and rec[k] is not None:
             return str(rec[k]).strip()
     raise KeyError(f"no answer field in record keys={list(rec.keys())}")
 
 
 def _prompt_of(rec: dict) -> str:
-    """Raw record -> question prompt. MusicAVQADataset stores it under 'prompt'
-    when present; otherwise fall back to the raw 'question_content' template."""
+    """Raw record -> rendered question prompt, matching MusicAVQADataset."""
     if "prompt" in rec and rec["prompt"]:
         return rec["prompt"]
-    q = rec.get("question_content", rec.get("question", ""))
-    # templ values are stored under 'templ_values' as a JSON string in MUSIC-AVQA
-    return str(q)
+    from av_ib.data.musicavqa import render_question
+    return render_question(rec["question_content"], rec["templ_values"])
+
+
+def _video_path_of(rec: dict, video_root: str | Path) -> str:
+    """Raw record -> absolute video path, matching MusicAVQADataset."""
+    if rec.get("video_path"):
+        return rec["video_path"]
+    return str(Path(video_root) / f"{rec['video_id']}.mp4")
 
 
 def build_pairs(labels_json: str | Path,
+                video_root: str | Path,
                 *,
                 include_anchor: bool = True,
                 include_negctrl: bool = True,
@@ -73,10 +80,13 @@ def build_pairs(labels_json: str | Path,
     for rec in recs:
         if not rec.get("identity_correct", False):
             continue  # only items the model got right under clean evidence
-        gold = _gold_of(rec)
-        prompt = _prompt_of(rec) + suffix
-        vp = rec.get("video_path")
-        ap = rec.get("audio_path", vp)
+        try:
+            gold = _gold_of(rec)
+            prompt = _prompt_of(rec) + suffix
+            vp = _video_path_of(rec, video_root)
+        except Exception:
+            continue  # skip malformed records (e.g. bad templ_values)
+        ap = vp  # MUSIC-AVQA: audio extracted from the same mp4
 
         vid_flip_zero = rec.get("flips_vid_zero", False)
         vid_flip_mean = rec.get("flips_vid_mean", False)
@@ -125,8 +135,8 @@ def build_pairs(labels_json: str | Path,
 
 
 class PreferencePairDataset(Dataset):
-    def __init__(self, labels_json: str | Path, **kw):
-        self.pairs = build_pairs(labels_json, **kw)
+    def __init__(self, labels_json: str | Path, video_root: str | Path, **kw):
+        self.pairs = build_pairs(labels_json, video_root, **kw)
         if not self.pairs:
             raise RuntimeError(
                 f"no preference pairs built from {labels_json}; "

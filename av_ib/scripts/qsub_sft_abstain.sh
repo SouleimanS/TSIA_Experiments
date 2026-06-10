@@ -22,6 +22,7 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
 export CUDA_VISIBLE_DEVICES=0
 
 LABELS="$PBS_O_WORKDIR/runs/abstain_labels.json"
+VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/MUSIC-AVQA/videos/all"
 
 # GATE: submit only after Stage-0 shows the abstain prompt alone does NOT
 # already fail-safe, and the miner produced abstain_labels.json with enough
@@ -37,7 +38,7 @@ fi
 # ── C2a-SFT: b_video_only VIB-only (frozen LLM) ──
 echo "=== C2a-SFT | b_video_only | VIB-only (no LoRA) ==="
 python -u -m av_ib.train.train_sft_abstain \
-    --labels-json "$LABELS" \
+    --labels-json "$LABELS" --video-root "$VIDEO_ROOT" \
     --variant b_video_only \
     --num-steps 400 --lr 5e-5 --anchor-ratio 1.0 \
     --lam-abstain 1.0 --lam-anchor 0.5 --lam-negctrl 0.5 \
@@ -47,7 +48,7 @@ python -u -m av_ib.train.train_sft_abstain \
 # ── C1-SFT: vanilla + LoRA (VIB frozen) ──
 echo "=== C1-SFT | vanilla + LoRA | VIB frozen ==="
 python -u -m av_ib.train.train_sft_abstain \
-    --labels-json "$LABELS" \
+    --labels-json "$LABELS" --video-root "$VIDEO_ROOT" \
     --variant b_video_only --use-lora --freeze-vib \
     --num-steps 400 --lr 5e-5 --anchor-ratio 1.0 \
     --lam-abstain 1.0 --lam-anchor 0.5 --lam-negctrl 0.5 \
@@ -57,7 +58,7 @@ python -u -m av_ib.train.train_sft_abstain \
 # ── C2b-SFT: b_video_only + LoRA ──
 echo "=== C2b-SFT | b_video_only + LoRA ==="
 python -u -m av_ib.train.train_sft_abstain \
-    --labels-json "$LABELS" \
+    --labels-json "$LABELS" --video-root "$VIDEO_ROOT" \
     --variant b_video_only --use-lora \
     --num-steps 400 --lr 5e-5 --anchor-ratio 1.0 \
     --lam-abstain 1.0 --lam-anchor 0.5 --lam-negctrl 0.5 \
