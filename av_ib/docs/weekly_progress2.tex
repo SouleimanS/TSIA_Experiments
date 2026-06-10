@@ -154,7 +154,7 @@ bottleneck} --- which is why we pivot the evaluation (next slides).}
 \node[frz] (venc) at (-2.0, 2.8) {Vision Enc.\ (frozen)};
 \node[frz] (aenc) at ( 2.0, 2.8) {Audio Enc.\ (frozen)};
 \node[trn] (vvib) at (-2.0, 1.5) {SinkAwareVIB\\[-1pt](video, trained)};
-\node[idn] (avib) at ( 2.0, 1.5) {IdentityAudioPath\\[-1pt](no-op, 0 KL)};
+\node[idn] (avib) at ( 2.0, 1.5) {audio passthrough\\[-1pt](VIB did not transfer)};
 \node[win] (splice) at (0, 0.2) {direct splice (no fusion, no joint VIB)};
 \node[frz] (llm)  at ( 0,  -1.2) {Qwen3-Omni LLM\\[-1pt]\textbf{frozen --- no LoRA}};
 \draw[arr] (venc)--(vvib); \draw[arr] (aenc)--(avib);
@@ -163,7 +163,8 @@ bottleneck} --- which is why we pivot the evaluation (next slides).}
 \end{tikzpicture}}
 
 \vspace{2pt}
-{\footnotesize \textbf{Video-only bottleneck}: only the video VIB trains;
+{\footnotesize \textbf{Video-only bottleneck}: only the video VIB trains. We
+tried to apply the same bottleneck to audio but couldn't get it to work, so
 audio passes through untouched (it was inert anyway).}
 \end{column}
 
