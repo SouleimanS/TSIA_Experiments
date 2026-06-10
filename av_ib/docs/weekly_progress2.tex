@@ -111,23 +111,21 @@ Audio channel rate $\mathrm{KL}_a$ (all runs) & frozen $\sim$477 \\
 
 \begin{column}{0.47\textwidth}
 
-\begin{block}{Why this matters}
+\begin{block}{Per-modality ablation (NLL vs.\ \texttt{identity})}
 {\footnotesize
-The visual-shortcut behaviour we flagged last week (AVHBench AV-Matching at
-50\,\%, audio $-2.7$\,pp) is not a model bug to be ``fixed'' by contrastive
-training --- it is the \textbf{rational solution} to a benchmark whose answers
-are mostly recoverable without audio.}
-\end{block}
-
-\begin{block}{External corroboration}
-{\footnotesize
-\textbf{Omni-R1} (MIT, on Qwen2.5-Omni) independently finds:
-\begin{itemize}\setlength\itemsep{1pt}
-  \item text-only fine-tuning \emph{improves} audio-benchmark accuracy;
-  \item audio-withheld inference shows gains come from better text reasoning.
-\end{itemize}
-Same disease, sibling model. Our contribution is the \textbf{causal,
-per-channel} version --- and a remedy.}
+\begin{tabular}{l r}
+\toprule
+\textbf{Ablation} & \textbf{$\Delta$NLL} \\
+\midrule
+\texttt{identity} (reference) & --- \\
+\rowcolor{paperD!12}
+\texttt{video\_only} (drop audio) & $+4.4$\,\% \\
+\texttt{audio\_only} (drop video) & TODO \\
+\texttt{zero} (destroy both) & TODO \\
+\texttt{mean} & TODO \\
+\texttt{shuffle} & TODO \\
+\bottomrule
+\end{tabular}}
 \end{block}
 
 \end{column}
