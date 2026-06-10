@@ -11,8 +11,6 @@
 \usepackage[table]{xcolor}
 \usepackage{array}
 \usepackage{graphicx}
-\usepackage{pgfplots}
-\pgfplotsset{compat=1.16}
 
 \usetikzlibrary{positioning, shapes.geometric, arrows.meta, backgrounds, fit, calc}
 
@@ -390,82 +388,143 @@ toward abstention.} Fail-safety must therefore be \emph{trained}, not assumed.}
 \end{frame}
 
 % =====================================================================
+% helper: map data coords to tikz cm inside a fixed plot box
+% Plot box: x in [0,14000]->0..4cm, y in [72,90]->0..3.6cm
+
 \section{Graphs}
 
 \begin{frame}{The week in three graphs}
 
 \begin{columns}[T]
+
+% ---- plot 1: rate-distortion ----
 \begin{column}{0.33\textwidth}
 \centering
-{\scriptsize\textbf{Rate--distortion: accuracy vs.\ video rate}}\\[2pt]
-\begin{tikzpicture}
-\begin{axis}[
-  width=4.6cm, height=4.4cm, font=\tiny,
-  xlabel={$\mathrm{KL}_v$ (rate)}, ylabel={held-out acc.\ (\%)},
-  xmin=0, xmax=14000, ymin=72, ymax=90,
-  xtick={2301,4700,12229}, xticklabels={2301,$\sim$4.7k,12229},
-  x tick label style={rotate=45},
-  grid=major, grid style={black!10}]
-\addplot[only marks, mark=*, mark size=2pt, paperB] coordinates
-  {(12229,86.0) (4710,80.0) (2301,76.7)};
-\addplot[only marks, mark=square*, mark size=2.2pt, paperD] coordinates
-  {(4776,84.0)};
-\addplot[only marks, mark=triangle*, mark size=2.4pt, black!60] coordinates
-  {(12229,76.7)};
-\node[font=\tiny, anchor=west, paperD] at (axis cs:5100,84.6) {bttlnk only};
-\node[font=\tiny, anchor=west, paperB] at (axis cs:5000,79.2) {LoRA$+$bttlnk};
-\node[font=\tiny, anchor=east, paperB] at (axis cs:12000,87.5) {LoRA};
-\node[font=\tiny, anchor=east, black!60] at (axis cs:12000,75.3) {vanilla};
-\end{axis}
-\end{tikzpicture}\\[1pt]
-{\tiny Compression buys a clean trade-off; at matched rate the frozen-LLM
-point (green) sits highest.}
+{\scriptsize\textbf{Rate--distortion: accuracy vs.\ $\mathrm{KL}_v$}}\\[3pt]
+\begin{tikzpicture}[font=\tiny, >=stealth]
+% axes: box 4cm wide x 3.2cm tall
+% x: 0..14000 -> 0..4, y: 72..90 -> 0..3.2
+\def\xsc{0.0002857} % 4/14000
+\def\ysc{0.17778}   % 3.2/18
+\def\yoff{72}
+\pgfmathsetmacro{\Ax}{12229*\xsc} \pgfmathsetmacro{\Ay}{(86.0-\yoff)*\ysc}
+\pgfmathsetmacro{\Bx}{4710*\xsc}  \pgfmathsetmacro{\By}{(80.0-\yoff)*\ysc}
+\pgfmathsetmacro{\Cx}{2301*\xsc}  \pgfmathsetmacro{\Cy}{(76.7-\yoff)*\ysc}
+\pgfmathsetmacro{\Dx}{4776*\xsc}  \pgfmathsetmacro{\Dy}{(84.0-\yoff)*\ysc}
+\pgfmathsetmacro{\Ex}{12229*\xsc} \pgfmathsetmacro{\Ey}{(76.7-\yoff)*\ysc}
+% grid
+\draw[black!10] (0,0.8) -- (4,0.8);
+\draw[black!10] (0,1.6) -- (4,1.6);
+\draw[black!10] (0,2.4) -- (4,2.4);
+\draw[black!10] (0,3.2) -- (4,3.2);
+% axes
+\draw[->] (0,0) -- (4.3,0) node[right] {$\mathrm{KL}_v$};
+\draw[->] (0,0) -- (0,3.5) node[above] {acc.\,(\%)};
+% y ticks
+\foreach \yv/\yl in {76/76,80/80,84/84,88/88}{
+  \pgfmathsetmacro{\yp}{(\yv-\yoff)*\ysc}
+  \draw (0,\yp) -- (-0.1,\yp) node[left] {\yl};
+}
+% x ticks
+\foreach \xv/\xl in {2301/2.3k,4776/4.8k,12229/12.2k}{
+  \pgfmathsetmacro{\xp}{\xv*\xsc}
+  \draw (\xp,0) -- (\xp,-0.1) node[below,rotate=40,anchor=north east] {\xl};
+}
+% LoRA trend line
+\draw[paperB!50, dashed] (\Ax,\Ay) -- (\Bx,\By) -- (\Cx,\Cy);
+% points
+\fill[paperB]  (\Ax,\Ay) circle(2.2pt) node[above right=-1pt] {LoRA};
+\fill[paperB]  (\Bx,\By) circle(2.2pt) node[below right=-1pt] {LoRA$+$bttlnk};
+\fill[paperB]  (\Cx,\Cy) circle(2.2pt);
+\fill[paperD]  (\Dx,\Dy) circle(2.5pt) node[above right=-1pt] {\textbf{bttlnk only}};
+\fill[black!40](\Ex,\Ey) circle(2.0pt) node[below left=-1pt] {vanilla};
+\end{tikzpicture}\\[2pt]
+{\tiny At matched rate, the frozen-LLM point (green) sits 4\,pp above LoRA$+$bottleneck.}
 \end{column}
 
+% ---- plot 2: ΔNLL bar chart ----
 \begin{column}{0.33\textwidth}
 \centering
-{\scriptsize\textbf{Ablation: $\Delta$NLL when evidence is deleted}}\\[2pt]
-\begin{tikzpicture}
-\begin{axis}[
-  width=4.6cm, height=4.4cm, font=\tiny,
-  ybar, bar width=7pt,
-  ylabel={$\Delta$NLL (\%)}, ymin=0, ymax=65,
-  symbolic x coords={audio,shuffle,mean,zero,video},
-  xtick=data, x tick label style={rotate=45},
-  nodes near coords, nodes near coords style={font=\tiny},
-  grid=major, grid style={black!10}]
-\addplot[fill=paperB!40, draw=paperB] coordinates
-  {(audio,8.3) (shuffle,6.3) (mean,29.7) (zero,48.7) (video,57.5)};
-\end{axis}
-\end{tikzpicture}\\[1pt]
-{\tiny Deleting audio ($+8.3$\,\%) costs barely more than shuffling
-\emph{everything} ($+6.3$\,\%); only video carries information.}
+{\scriptsize\textbf{Ablation: $\Delta$NLL when evidence is deleted}}\\[3pt]
+\begin{tikzpicture}[font=\tiny]
+% 5 bars, max 65, box 4cm x 3.2cm
+% bars at x = 0.3, 1.1, 1.9, 2.7, 3.5  width=0.5
+\def\ys{0.04923} % 3.2/65
+\draw[->] (0,0) -- (0,3.5) node[above] {$\Delta$NLL (\%)};
+\draw[->] (0,0) -- (4.4,0);
+% y ticks
+\foreach \yv in {10,20,30,40,50,60}{
+  \pgfmathsetmacro{\yp}{\yv*\ys}
+  \draw (0,\yp)--(-0.1,\yp) node[left]{\yv};
+}
+% bars: (x-center, value, label)
+\foreach \xc/\val/\lbl in {
+  0.35/8.3/audio,
+  1.10/6.3/shuffle,
+  1.85/29.7/mean,
+  2.60/48.7/zero,
+  3.35/57.5/video}{
+  \pgfmathsetmacro{\ht}{\val*\ys}
+  \pgfmathsetmacro{\xlo}{\xc-0.25}
+  \pgfmathsetmacro{\xhi}{\xc+0.25}
+  \fill[paperB!50,draw=paperB] (\xlo,0) rectangle (\xhi,\ht);
+  \node[above,rotate=45,anchor=south west,font=\tiny] at (\xc,\ht) {\val\,\%};
+  \node[below,rotate=45,anchor=north east,font=\tiny] at (\xc,-0.05) {\lbl};
+}
+% highlight audio bar
+\draw[paperA, thick] (0.10,0) rectangle (0.60,{8.3*\ys});
+\end{tikzpicture}\\[2pt]
+{\tiny Removing audio (+8.3\%) ≈ shuffling everything (+6.3\%). Only video matters.}
 \end{column}
 
+% ---- plot 3: training curves ----
 \begin{column}{0.33\textwidth}
 \centering
-{\scriptsize\textbf{Training: video rate falls, audio rate frozen}}\\[2pt]
-\begin{tikzpicture}
-\begin{axis}[
-  width=4.6cm, height=4.4cm, font=\tiny,
-  xlabel={step}, ylabel={KL},
-  xmin=0, xmax=2000, ymin=0, ymax=12000,
-  grid=major, grid style={black!10},
-  legend style={font=\tiny, at={(0.97,0.97)}, anchor=north east}]
-\addplot[paperB, thick, mark=*, mark size=1.4pt] coordinates
-  {(0,10779) (1999,4103)};
-\addlegendentry{$\mathrm{KL}_v$ (no LoRA)}
-\addplot[paperC, thick, mark=*, mark size=1.4pt] coordinates
-  {(0,10665) (1999,4305)};
-\addlegendentry{$\mathrm{KL}_v$ (w/ LoRA)}
-\addplot[paperA, thick, dashed, mark=*, mark size=1.4pt] coordinates
-  {(0,494) (1999,486)};
-\addlegendentry{$\mathrm{KL}_a$}
-\end{axis}
-\end{tikzpicture}\\[1pt]
-{\tiny $\beta$ pulls the video rate down 2.6$\times$; the audio rate never
-moves --- no relevance gradient, nothing to trade.}
+{\scriptsize\textbf{Training curves: video rate falls, audio frozen}}\\[3pt]
+\begin{tikzpicture}[font=\tiny, >=stealth]
+% x: 0..2000->0..4, y: 0..12000->0..3.2
+\def\xsc{0.002}    % 4/2000
+\def\ysc{0.0002667} % 3.2/12000
+% grid
+\foreach \yv in {3000,6000,9000,12000}{
+  \pgfmathsetmacro{\yp}{\yv*\ysc}
+  \draw[black!10] (0,\yp)--(4,\yp);
+}
+% axes
+\draw[->](0,0)--(4.3,0) node[right]{step};
+\draw[->](0,0)--(0,3.5) node[above]{KL};
+% y ticks
+\foreach \yv/\yl in {3000/3k,6000/6k,9000/9k,12000/12k}{
+  \pgfmathsetmacro{\yp}{\yv*\ysc}
+  \draw(0,\yp)--(-0.1,\yp) node[left]{\yl};
+}
+% x ticks
+\foreach \xv/\xl in {0/0,1000/1k,2000/2k}{
+  \pgfmathsetmacro{\xp}{\xv*\xsc}
+  \draw(\xp,0)--(\xp,-0.1) node[below]{\xl};
+}
+% KL_v no-LoRA: 10779->4103
+\draw[paperB, very thick]
+  (0,{10779*\ysc}) -- (4,{4103*\ysc});
+\fill[paperB](0,{10779*\ysc}) circle(2pt);
+\fill[paperB](4,{4103*\ysc}) circle(2pt);
+\node[paperB, anchor=west, font=\tiny] at (4.05,{4103*\ysc}) {$\mathrm{KL}_v$ no LoRA};
+% KL_v w-LoRA: 10665->4305
+\draw[paperC, very thick]
+  (0,{10665*\ysc}) -- (4,{4305*\ysc});
+\fill[paperC](0,{10665*\ysc}) circle(2pt);
+\fill[paperC](4,{4305*\ysc}) circle(2pt);
+\node[paperC, anchor=west, font=\tiny] at (4.05,{4305*\ysc}) {$\mathrm{KL}_v$ w/ LoRA};
+% KL_a: 494->486 (flat)
+\draw[paperA, very thick, dashed]
+  (0,{494*\ysc}) -- (4,{486*\ysc});
+\fill[paperA](0,{494*\ysc}) circle(2pt);
+\fill[paperA](4,{486*\ysc}) circle(2pt);
+\node[paperA, anchor=west, font=\tiny] at (4.05,{490*\ysc}) {$\mathrm{KL}_a$ (frozen)};
+\end{tikzpicture}\\[2pt]
+{\tiny $\beta$ halves the video rate; the audio rate never moves.}
 \end{column}
+
 \end{columns}
 
 \end{frame}
