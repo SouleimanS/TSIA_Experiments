@@ -11,6 +11,8 @@
 \usepackage[table]{xcolor}
 \usepackage{array}
 \usepackage{graphicx}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.16}
 
 \usetikzlibrary{positioning, shapes.geometric, arrows.meta, backgrounds, fit, calc}
 
@@ -220,6 +222,110 @@ but here that is already satisfied without audio-visual evidence, so accuracy
 \end{frame}
 
 % =====================================================================
+\begin{frame}{Why MUSIC-AVQA \emph{invites} prior-based reasoning}
+
+\begin{columns}[T]
+\begin{column}{0.50\textwidth}
+\begin{block}{What the benchmark is}
+{\footnotesize
+$\sim$9.3k videos of \textbf{musical-instrument performances} (22 instruments)
+with $\sim$45k QA pairs generated from $\sim$33 \textbf{question templates}
+(``Is the \texttt{<instr>} playing?'', ``How many instruments are sounding?'',
+``Which instrument starts first?''). Answers come from a \textbf{small closed
+vocabulary}: yes/no, small counts, instrument names.}
+\end{block}
+
+\begin{block}{Three structural shortcuts}
+{\footnotesize
+\begin{enumerate}\setlength\itemsep{2pt}
+  \item \textbf{Templates leak the answer type}: ``how many\ldots'' is almost
+        always a small count; the per-template answer distribution is highly
+        skewed, so the modal answer alone scores well.
+  \item \textbf{The domain is narrow}: every clip is a performance, so
+        ``Is the instrument playing?'' defaults to \emph{yes} ---
+        instruments in performance videos are usually playing.
+  \item \textbf{The question names the entities}: when the prompt already says
+        ``the violin,'' identifying the instrument from pixels or sound is
+        unnecessary.
+\end{enumerate}}
+\end{block}
+\end{column}
+
+\begin{column}{0.46\textwidth}
+\begin{block}{The information-theoretic reading}
+{\footnotesize
+A model trained with cross-entropy fits $p(y\,|\,Q,X_a,X_v)$. If the
+template+domain prior $p(y\,|\,Q)$ already concentrates on the right answer,
+then $I(X_a,X_v;Y\,|\,Q)\!\approx\!0$ and the loss is minimised by
+\textbf{ignoring the evidence}. The model is not failing --- it is doing
+exactly what the objective rewards on this data.}
+\end{block}
+
+\begin{block}{And our measurements confirm it}
+{\footnotesize
+Delete \emph{both} modalities $\Rightarrow$ accuracy stays at 65\,\%
+(the prior alone); delete audio $\Rightarrow$ $+8.3$\,\% NLL only.
+Only $\sim$0.5\,\% of sampled questions \emph{require} combining audio and
+video. The benchmark trains and rewards a \textbf{language-prior policy}.}
+\end{block}
+\end{column}
+\end{columns}
+
+\end{frame}
+
+% =====================================================================
+\begin{frame}{Example questions --- templated vs.\ open-domain AVQA}
+
+\begin{columns}[T]
+\begin{column}{0.48\textwidth}
+\begin{block}{MUSIC-AVQA (templated, narrow domain)}
+{\footnotesize
+\begin{itemize}\setlength\itemsep{2pt}
+  \item ``Is the \emph{guitar} in the video always playing?'' \hfill
+        \textcolor{paperA}{prior: \emph{yes}}
+  \item ``How many instruments are sounding in the video?'' \hfill
+        \textcolor{paperA}{prior: \emph{one/two}}
+  \item ``Which is the musical instrument that sounds at the same time as the
+        \emph{piano}?'' \hfill \textcolor{paperA}{entities named in prompt}
+  \item ``Is there a \emph{voiceover}?'' \hfill \textcolor{paperA}{prior: \emph{no}}
+\end{itemize}
+Closed answer set, skewed per-template distributions $\Rightarrow$ guessable
+without looking or listening.}
+\end{block}
+\end{column}
+
+\begin{column}{0.48\textwidth}
+\begin{block}{AVQA / VGGSound-based (open domain)}
+{\footnotesize
+\begin{itemize}\setlength\itemsep{2pt}
+  \item ``What is making the sound in the background?'' \hfill
+        \textcolor{paperD}{must \emph{listen}}
+  \item ``Why did the crowd suddenly cheer?'' \hfill
+        \textcolor{paperD}{must \emph{look + listen}}
+  \item ``What happened after the glass broke?'' \hfill
+        \textcolor{paperD}{audio event grounds the answer}
+  \item ``Where is the barking dog?'' \hfill
+        \textcolor{paperD}{sound source must be localised in the frame}
+\end{itemize}
+Everyday scenes ($\sim$57k VGGSound clips), free-form events: the question text
+alone does not determine the answer.}
+\end{block}
+\end{column}
+\end{columns}
+
+\vspace{4pt}
+\begin{block}{Consequence for us}
+{\footnotesize
+The pathology is a property of \textbf{templated, narrow-domain} benchmarks, not
+of AVQA in general. Candidate next testbeds where
+$I(X_a,X_v;Y\,|\,Q)$ is genuinely large: VGGSound-based AVQA and our own
+corruption-based fail-safe protocol (which manufactures evidence-dependence by
+construction).}
+\end{block}
+
+\end{frame}
+
+% =====================================================================
 \section{AVHBench}
 
 \begin{frame}{AVHBench --- the filter is not a fail-safe}
@@ -269,13 +375,96 @@ yes-rate & 38\% & 57\% & $+19$\,pp \\
 \end{tabular}
 
 \vspace{8pt}
+\begin{alertblock}{What is happening}
 {\footnotesize
-\textbf{What is happening:} caution would require the posterior to \emph{flatten}
+Caution would require the posterior to \emph{flatten}
 when evidence is weak ($\max_y p(y|x)\!\downarrow$). Instead, discarding evidence
 makes the answer regress toward the unconditional prior
 $p(y)$ --- and here the credulous default is ``yes,'' so the yes-rate climbs
 $38\!\to\!57$\,\%. \textbf{Compression moves the model toward its prior, not
 toward abstention.} Fail-safety must therefore be \emph{trained}, not assumed.}
+\end{alertblock}
+\end{column}
+\end{columns}
+
+\end{frame}
+
+% =====================================================================
+\section{Graphs}
+
+\begin{frame}{The week in three graphs}
+
+\begin{columns}[T]
+\begin{column}{0.33\textwidth}
+\centering
+{\scriptsize\textbf{Rate--distortion: accuracy vs.\ video rate}}\\[2pt]
+\begin{tikzpicture}
+\begin{axis}[
+  width=4.6cm, height=4.4cm, font=\tiny,
+  xlabel={$\mathrm{KL}_v$ (rate)}, ylabel={held-out acc.\ (\%)},
+  xmin=0, xmax=14000, ymin=72, ymax=90,
+  xtick={2301,4700,12229}, xticklabels={2301,$\sim$4.7k,12229},
+  x tick label style={rotate=45},
+  grid=major, grid style={black!10}]
+\addplot[only marks, mark=*, mark size=2pt, paperB] coordinates
+  {(12229,86.0) (4710,80.0) (2301,76.7)};
+\addplot[only marks, mark=square*, mark size=2.2pt, paperD] coordinates
+  {(4776,84.0)};
+\addplot[only marks, mark=triangle*, mark size=2.4pt, black!60] coordinates
+  {(12229,76.7)};
+\node[font=\tiny, anchor=west, paperD] at (axis cs:5100,84.6) {bttlnk only};
+\node[font=\tiny, anchor=west, paperB] at (axis cs:5000,79.2) {LoRA$+$bttlnk};
+\node[font=\tiny, anchor=east, paperB] at (axis cs:12000,87.5) {LoRA};
+\node[font=\tiny, anchor=east, black!60] at (axis cs:12000,75.3) {vanilla};
+\end{axis}
+\end{tikzpicture}\\[1pt]
+{\tiny Compression buys a clean trade-off; at matched rate the frozen-LLM
+point (green) sits highest.}
+\end{column}
+
+\begin{column}{0.33\textwidth}
+\centering
+{\scriptsize\textbf{Ablation: $\Delta$NLL when evidence is deleted}}\\[2pt]
+\begin{tikzpicture}
+\begin{axis}[
+  width=4.6cm, height=4.4cm, font=\tiny,
+  ybar, bar width=7pt,
+  ylabel={$\Delta$NLL (\%)}, ymin=0, ymax=65,
+  symbolic x coords={audio,shuffle,mean,zero,video},
+  xtick=data, x tick label style={rotate=45},
+  nodes near coords, nodes near coords style={font=\tiny},
+  grid=major, grid style={black!10}]
+\addplot[fill=paperB!40, draw=paperB] coordinates
+  {(audio,8.3) (shuffle,6.3) (mean,29.7) (zero,48.7) (video,57.5)};
+\end{axis}
+\end{tikzpicture}\\[1pt]
+{\tiny Deleting audio ($+8.3$\,\%) costs barely more than shuffling
+\emph{everything} ($+6.3$\,\%); only video carries information.}
+\end{column}
+
+\begin{column}{0.33\textwidth}
+\centering
+{\scriptsize\textbf{Training: video rate falls, audio rate frozen}}\\[2pt]
+\begin{tikzpicture}
+\begin{axis}[
+  width=4.6cm, height=4.4cm, font=\tiny,
+  xlabel={step}, ylabel={KL},
+  xmin=0, xmax=2000, ymin=0, ymax=12000,
+  grid=major, grid style={black!10},
+  legend style={font=\tiny, at={(0.97,0.97)}, anchor=north east}]
+\addplot[paperB, thick, mark=*, mark size=1.4pt] coordinates
+  {(0,10779) (1999,4103)};
+\addlegendentry{$\mathrm{KL}_v$ (no LoRA)}
+\addplot[paperC, thick, mark=*, mark size=1.4pt] coordinates
+  {(0,10665) (1999,4305)};
+\addlegendentry{$\mathrm{KL}_v$ (w/ LoRA)}
+\addplot[paperA, thick, dashed, mark=*, mark size=1.4pt] coordinates
+  {(0,494) (1999,486)};
+\addlegendentry{$\mathrm{KL}_a$}
+\end{axis}
+\end{tikzpicture}\\[1pt]
+{\tiny $\beta$ pulls the video rate down 2.6$\times$; the audio rate never
+moves --- no relevance gradient, nothing to trade.}
 \end{column}
 \end{columns}
 
