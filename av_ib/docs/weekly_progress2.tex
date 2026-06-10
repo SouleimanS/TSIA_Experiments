@@ -103,7 +103,7 @@
 ]
 \node[frz] (venc) at (-2.0, 2.8) {Vision Enc.\ (frozen)};
 \node[frz] (aenc) at ( 2.0, 2.8) {Audio Enc.\ (frozen)};
-\node[trn] (vvib) at (-2.0, 1.5) {SinkAwareVIB\\[-1pt](video, trained)};
+\node[trn] (vvib) at (-2.0, 1.5) {video bottleneck\\[-1pt](trained)};
 \node[idn] (avib) at ( 2.0, 1.5) {audio passthrough\\[-1pt](VIB did not transfer)};
 \node[win] (splice) at (0, 0.2) {direct splice (no fusion, no joint VIB)};
 \node[frz] (llm)  at ( 0,  -1.2) {Qwen3-Omni LLM\\[-1pt]\textbf{frozen --- no LoRA}};
@@ -224,15 +224,15 @@ is a \textbf{controllable information rate} and an explicit knob for
 \begin{block}{The test}
 {\footnotesize
 A good safety mechanism should \emph{refuse} (or hedge) when the evidence
-behind an answer is corrupted. We ran T2 vs vanilla on AVHBench
-(200 items) with focus on Video-driven Audio Hallucination --- the task where
-the model is asked to confirm audio content that has been replaced.}
+behind an answer is corrupted. We ran the bottleneck-only model vs vanilla on
+AVHBench (200 items) with focus on Video-driven Audio Hallucination --- the task
+where the model is asked to confirm audio content that has been replaced.}
 \end{block}
 
 \begin{block}{Result}
 {\footnotesize
-T2 $\approx$ vanilla overall, but on the hallucination task it got
-\textbf{worse}: it says ``yes'' to mismatched audio \emph{more} often.
+The bottleneck model $\approx$ vanilla overall, but on the hallucination task it
+got \textbf{worse}: it says ``yes'' to mismatched audio \emph{more} often.
 The bottleneck removed information without making the model aware that
 information was missing.}
 \end{block}
@@ -247,14 +247,14 @@ information was missing.}
 \midrule
 Vanilla   & 69.5\% & 38\% & --- \\
 \rowcolor{paperA!8}
-T2 (VIB only) & 67.5\% & 57\% & $-2.0$\,pp \\
+Bottleneck only & 67.5\% & 57\% & $-2.0$\,pp \\
 \bottomrule
 \end{tabular}
 
 \vspace{6pt}
 \begin{tabular}{l r r r}
 \toprule
-\textbf{Video-driven Audio Hall.} & \textbf{Base} & \textbf{T2} & \textbf{$\Delta$} \\
+\textbf{Video-driven Audio Hall.} & \textbf{Base} & \textbf{Bttlnk} & \textbf{$\Delta$} \\
 \midrule
 \rowcolor{paperA!10}
 Accuracy & 69.8\% & 61.5\% & $-8.3$\,pp \\
@@ -364,12 +364,12 @@ neg-ctrl (audio only) & gold & ``I can't tell'' \\
 
 \begin{block}{Conditions}
 {\footnotesize
-\begin{tabular}{l p{4.0cm}}
+\begin{tabular}{l p{3.7cm}}
 \toprule
-\textbf{C1} & vanilla + LoRA (no bottleneck) \\
+\textbf{LoRA only} & LoRA, no bottleneck \\
 \rowcolor{paperC!8}
-\textbf{C2a} & VIB only, frozen LLM \\
-\textbf{C2b} & VIB + LoRA \\
+\textbf{Bottleneck only} & frozen LLM, no LoRA \\
+\textbf{Bottleneck + LoRA} & both trained \\
 \bottomrule
 \end{tabular}
 \\[3pt]
@@ -402,9 +402,10 @@ Eval chained to fire on completion.}
 Corruption is currently applied to the \emph{output} of the bottleneck
 ($z_j$), downstream of the VIB:
 \begin{itemize}\setlength\itemsep{2pt}
-  \item \textbf{C1\,/\,C2b} (LoRA in the LLM, \emph{below} the corruption point):
-        the LLM sees the degraded tokens and can learn to abstain. \textcolor{paperD}{Trains fine.}
-  \item \textbf{C2a} (VIB only, frozen LLM): the VIB sits \emph{above} the
+  \item \textbf{LoRA conditions} (LoRA in the LLM, \emph{below} the corruption
+        point): the LLM sees the degraded tokens and can learn to abstain.
+        \textcolor{paperD}{Trains fine.}
+  \item \textbf{Bottleneck-only} (frozen LLM): the VIB sits \emph{above} the
         corruption and never observes it $\Rightarrow$ \texttt{vid\_zero}
         gives \textbf{zero gradient}. \textcolor{paperA}{Structurally cannot fail-safe.}
 \end{itemize}}
@@ -420,7 +421,7 @@ To fairly test the bottleneck hypothesis (degraded evidence in
 $\Rightarrow$ low-information code out $\Rightarrow$ frozen LLM abstains),
 the corruption must be injected \textbf{upstream of the VIB}, on the encoder
 output. This requires re-mining labels with upstream corruption.\\[4pt]
-\textbf{Note:} C1 and C2b results from the current run remain valid either way.}
+\textbf{Note:} the LoRA conditions' results from the current run remain valid either way.}
 \end{block}
 
 \end{column}
@@ -452,8 +453,8 @@ output. This requires re-mining labels with upstream corruption.\\[4pt]
 
 \begin{block}{1.\ Decide corruption placement, then finish the 6-way comparison}
   Resolve the upstream-vs-downstream question; relabel if needed. Then read
-  risk--coverage on held-out corruptions: does the bottleneck (C2) generalise
-  fail-safety better than LoRA alone (C1)?
+  risk--coverage on held-out corruptions: does the bottleneck generalise
+  fail-safety better than LoRA alone?
 \end{block}
 
 \begin{block}{2.\ Transfer the winner to AVHBench}
@@ -463,9 +464,9 @@ output. This requires re-mining labels with upstream corruption.\\[4pt]
 
 \begin{block}{3.\ Decide the deliverable}
   \begin{itemize}\setlength\itemsep{2pt}
-    \item C2 $\gg$ C1 on held-out $\Rightarrow$ bottleneck buys fail-safe generalisation. \textbf{Ship the method.}
-    \item C2 $\approx$ C1 $\Rightarrow$ bottleneck not needed; DPO alone fixes it. \textbf{Ship Asset A + simpler remedy.}
-    \item all $\approx$ baseline $\Rightarrow$ \textbf{ship Asset A} (the evaluation-pathology finding) alone.
+    \item bottleneck $\gg$ LoRA-alone on held-out $\Rightarrow$ bottleneck buys fail-safe generalisation. \textbf{Ship the method.}
+    \item bottleneck $\approx$ LoRA-alone $\Rightarrow$ bottleneck not needed; DPO alone fixes it. \textbf{Ship the benchmark diagnosis + simpler remedy.}
+    \item all $\approx$ baseline $\Rightarrow$ \textbf{ship the benchmark-diagnosis finding} (the evaluation pathology) alone.
   \end{itemize}
 \end{block}
 
