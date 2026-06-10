@@ -52,21 +52,21 @@
 
 \begin{frame}{What I did this week}
 
-\begin{block}{Diagnosed \emph{why} the model ignores audio --- it's the benchmark (``Asset A'')}
-  Causal per-modality ablation (E1) on MUSIC-AVQA: only $\sim$0.5\,\% of
-  questions are genuinely audio-visual; $\sim$46.5\,\% are answerable from the
-  language prior alone. The benchmark structurally \textbf{cannot} test an AV
+\begin{block}{Diagnosed \emph{why} the model ignores audio --- it's the benchmark}
+  Causal per-modality ablation on MUSIC-AVQA: removing video barely changes the
+  model's answer ($+4.4$\,\% NLL), and only $\sim$0.5\,\% of questions are
+  genuinely audio-visual. The benchmark structurally \textbf{cannot} test an AV
   bottleneck.
 \end{block}
 
-\begin{block}{Found the best architecture: T2 = frozen LLM + VIB only (no LoRA)}
+\begin{block}{Found the best architecture: frozen LLM + bottleneck only (no LoRA)}
   A bottleneck-only model (no LoRA) beats every LoRA variant on held-out
   accuracy and gives a clean rate--distortion curve. The bottleneck is a good
   \emph{lossy filter}.
 \end{block}
 
 \begin{block}{Tested fail-safety on AVHBench --- and it regressed}
-  T2 became \textbf{more credulous} (Video-driven Audio Hallucination
+  the model became \textbf{more credulous} (Video-driven Audio Hallucination
   $-8.3$\,pp). A lossy filter is not a safety mechanism. $\Rightarrow$ pivot to
   an explicit \textbf{fail-safe abstention} experiment (SFT vs DPO), now running.
 \end{block}
@@ -76,12 +76,12 @@
 % =====================================================================
 \section{Asset A}
 
-\begin{frame}{Asset A --- MUSIC-AVQA cannot test an AV bottleneck}
+\begin{frame}{MUSIC-AVQA cannot test an AV bottleneck}
 
 \begin{columns}[T]
 \begin{column}{0.50\textwidth}
 
-\begin{block}{E1: causal per-modality ablation}
+\begin{block}{Causal per-modality ablation}
 {\footnotesize
 For each test item, replace the spliced tokens and measure the change:
 \begin{itemize}\setlength\itemsep{1pt}
@@ -99,10 +99,9 @@ If accuracy barely moves when a modality is removed, the model never needed it.}
 \toprule
 \textbf{Probe} & \textbf{Result} \\
 \midrule
-Prior-driven questions      & $\sim$46.5\,\% \\
 \rowcolor{paperD!12}
-Genuinely AV-essential      & $\sim$0.5\,\% \\
 Cost of dropping video (\texttt{video\_only}) & $+4.4$\,\% NLL \\
+Genuinely AV-essential      & $\sim$0.5\,\% \\
 Audio channel rate $\mathrm{KL}_a$ (all runs) & frozen $\sim$477 \\
 \bottomrule
 \end{tabular}}
