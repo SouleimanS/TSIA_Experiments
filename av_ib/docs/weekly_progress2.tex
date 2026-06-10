@@ -53,10 +53,10 @@
 \begin{frame}{What I did this week}
 
 \begin{block}{Diagnosed \emph{why} the model ignores audio --- it's the benchmark}
-  Causal per-modality ablation on MUSIC-AVQA: removing video barely changes the
-  model's answer ($+4.4$\,\% NLL), and only $\sim$0.5\,\% of questions are
-  genuinely audio-visual. The benchmark structurally \textbf{cannot} test an AV
-  bottleneck.
+  Causal per-modality ablation on MUSIC-AVQA: removing audio barely changes the
+  model's answer ($+8.3$\,\% NLL, accuracy $65\to62.5$\,\%), and only
+  $\sim$0.5\,\% of questions are genuinely audio-visual. The benchmark
+  structurally \textbf{cannot} test an AV bottleneck.
 \end{block}
 
 \begin{block}{Found the best architecture: frozen LLM + bottleneck only (no LoRA)}
@@ -78,7 +78,7 @@
 
 \begin{frame}{MUSIC-AVQA cannot test an AV bottleneck}
 
-\begin{block}{The test}
+\begin{block}{The test (40 items, vanilla model)}
 {\footnotesize
 Delete one modality's tokens and measure how much worse the model predicts the
 correct answer ($\Delta$NLL). \textbf{If the answer barely degrades, the model
@@ -86,28 +86,31 @@ never needed that modality.}}
 \end{block}
 
 \begin{columns}[T]
-\begin{column}{0.52\textwidth}
+\begin{column}{0.54\textwidth}
 \centering
 {\footnotesize
-\begin{tabular}{l l r}
+\begin{tabular}{l l r r}
 \toprule
-\textbf{What we delete} & \textbf{Evidence left} & \textbf{$\Delta$NLL} \\
+\textbf{Delete} & \textbf{Left} & \textbf{$\Delta$NLL} & \textbf{Acc.} \\
 \midrule
-nothing \emph{(reference)} & audio + video & --- \\
+nothing \emph{(ref.)} & audio+video & --- & 65.0\,\% \\
 \rowcolor{paperD!12}
-audio & \textbf{video only} & \textbf{$+4.4$\,\%} \\
-video & audio only & TODO \\
-both & nothing & TODO \\
+\textbf{audio} & video only & \textbf{$+8.3$\,\%} & 62.5\,\% \\
+video & audio only & $+57.5$\,\% & 57.5\,\% \\
+both \emph{(zero)} & nothing & $+48.7$\,\% & 65.0\,\% \\
+both \emph{(mean)} & nothing & $+29.7$\,\% & 35.0\,\% \\
+both \emph{(shuffle)} & nothing & $+6.3$\,\% & 57.5\,\% \\
 \bottomrule
 \end{tabular}}
 \end{column}
 
-\begin{column}{0.46\textwidth}
+\begin{column}{0.44\textwidth}
 \begin{block}{What we find}
 {\footnotesize
-Dropping video costs almost nothing ($+4.4$\,\%), and only $\sim$\textbf{0.5\,\%}
-of questions are genuinely audio-visual. The audio channel stays inert
-throughout (rate $\mathrm{KL}_a$ frozen $\sim$477).}
+Dropping \textbf{audio} costs almost nothing ($+8.3$\,\% NLL, $-2.5$\,pp
+accuracy) --- the model barely uses it. Removing \emph{both} streams still
+leaves accuracy at $65$\,\%, and only $\sim$\textbf{0.5\,\%} of questions are
+genuinely audio-visual.}
 \end{block}
 \end{column}
 \end{columns}
@@ -115,9 +118,9 @@ throughout (rate $\mathrm{KL}_a$ frozen $\sim$477).}
 \vspace{4pt}
 \begin{block}{Conclusion}
 {\footnotesize
-MUSIC-AVQA is largely solvable from the language prior, so it \textbf{cannot
-validate an audio-visual bottleneck} --- which is why we pivot the evaluation
-(next slides).}
+The ``audio-visual'' benchmark is solved from video $+$ language prior, with
+audio essentially inert, so it \textbf{cannot validate an audio-visual
+bottleneck} --- which is why we pivot the evaluation (next slides).}
 \end{block}
 
 \end{frame}
