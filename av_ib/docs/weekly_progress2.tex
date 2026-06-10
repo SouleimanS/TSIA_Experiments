@@ -74,62 +74,51 @@
 \end{frame}
 
 % =====================================================================
-\section{Asset A}
+\section{Diagnosis}
 
 \begin{frame}{MUSIC-AVQA cannot test an AV bottleneck}
 
-\begin{columns}[T]
-\begin{column}{0.50\textwidth}
-
-\begin{block}{Causal per-modality ablation}
+\begin{block}{The test}
 {\footnotesize
-For each test item, replace the spliced tokens and measure the change:
-\begin{itemize}\setlength\itemsep{1pt}
-  \item \texttt{identity} --- reference
-  \item \texttt{video\_only} --- drop audio
-  \item \texttt{audio\_only} --- drop video
-  \item \texttt{zero\,/\,mean\,/\,shuffle} --- destroy both
-\end{itemize}
-If accuracy barely moves when a modality is removed, the model never needed it.}
+Delete one modality's tokens and measure how much worse the model predicts the
+correct answer ($\Delta$NLL). \textbf{If the answer barely degrades, the model
+never needed that modality.}}
 \end{block}
 
-\begin{block}{The numbers}
+\begin{columns}[T]
+\begin{column}{0.52\textwidth}
+\centering
 {\footnotesize
-\begin{tabular}{l r}
+\begin{tabular}{l l r}
 \toprule
-\textbf{Probe} & \textbf{Result} \\
+\textbf{What we delete} & \textbf{Evidence left} & \textbf{$\Delta$NLL} \\
 \midrule
+nothing \emph{(reference)} & audio + video & --- \\
 \rowcolor{paperD!12}
-Cost of dropping video (\texttt{video\_only}) & $+4.4$\,\% NLL \\
-Genuinely AV-essential      & $\sim$0.5\,\% \\
-Audio channel rate $\mathrm{KL}_a$ (all runs) & frozen $\sim$477 \\
+audio & \textbf{video only} & \textbf{$+4.4$\,\%} \\
+video & audio only & TODO \\
+both & nothing & TODO \\
 \bottomrule
 \end{tabular}}
-\end{block}
-
 \end{column}
 
-\begin{column}{0.47\textwidth}
-
-\begin{block}{Per-modality ablation (NLL vs.\ \texttt{identity})}
+\begin{column}{0.46\textwidth}
+\begin{block}{What we find}
 {\footnotesize
-\begin{tabular}{l r}
-\toprule
-\textbf{Ablation} & \textbf{$\Delta$NLL} \\
-\midrule
-\texttt{identity} (reference) & --- \\
-\rowcolor{paperD!12}
-\texttt{video\_only} (drop audio) & $+4.4$\,\% \\
-\texttt{audio\_only} (drop video) & TODO \\
-\texttt{zero} (destroy both) & TODO \\
-\texttt{mean} & TODO \\
-\texttt{shuffle} & TODO \\
-\bottomrule
-\end{tabular}}
+Dropping video costs almost nothing ($+4.4$\,\%), and only $\sim$\textbf{0.5\,\%}
+of questions are genuinely audio-visual. The audio channel stays inert
+throughout (rate $\mathrm{KL}_a$ frozen $\sim$477).}
 \end{block}
-
 \end{column}
 \end{columns}
+
+\vspace{4pt}
+\begin{block}{Conclusion}
+{\footnotesize
+MUSIC-AVQA is largely solvable from the language prior, so it \textbf{cannot
+validate an audio-visual bottleneck} --- which is why we pivot the evaluation
+(next slides).}
+\end{block}
 
 \end{frame}
 
