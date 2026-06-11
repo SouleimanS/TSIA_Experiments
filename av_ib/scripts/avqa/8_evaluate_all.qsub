@@ -7,8 +7,8 @@
 #PBS -j oe
 #PBS -o avqa_evaluate_all.qsub.log
 
-# Evaluate every trained checkpoint on the AVQA val split:
-accuracy (base models) + risk-coverage under corruption (abstention models).
+# Evaluate every trained checkpoint on the AVQA val split: accuracy (base
+# models) + risk-coverage under corruption (abstention models).
 
 set -euo pipefail
 cd "$PBS_O_WORKDIR"
