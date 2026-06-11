@@ -1,0 +1,68 @@
+#!/bin/bash
+#PBS -N avqa_evaluate_all
+#PBS -P gae50891
+#PBS -q rt_HF
+#PBS -l select=1
+#PBS -l walltime=10:00:00
+#PBS -j oe
+#PBS -o avqa_evaluate_all.qsub.log
+
+# Evaluate every trained checkpoint on the AVQA val split:
+accuracy (base models) + risk-coverage under corruption (abstention models).
+
+set -euo pipefail
+cd "$PBS_O_WORKDIR"
+mkdir -p "$PBS_O_WORKDIR/runs/avqa"
+source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
+conda activate av_ib
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+echo "=== Node: $(hostname)  Date: $(date) ==="
+nvidia-smi -L
+
+ANN_TRAIN="$HOME/SOULEIMAN_repo/datasets/AVQA/train_qa.json"
+ANN_VAL="$HOME/SOULEIMAN_repo/datasets/AVQA/val_qa.json"
+VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVQA/videos"
+[ -f "$ANN_TRAIN" ] || { echo "ERROR: $ANN_TRAIN missing — run 1_download_dataset.py" >&2; exit 1; }
+exec > >(tee -a "$PBS_O_WORKDIR/runs/avqa/avqa_evaluate_all_out.txt") 2>&1
+
+export CUDA_VISIBLE_DEVICES=0
+mkdir -p runs/avqa/eval
+
+# accuracy: base checkpoints + untrained reference
+for tag in v6b_base lora_baseline; do
+    CKPT="runs/avqa/${tag}_final.pt"
+    [ -f "$CKPT" ] || { echo "SKIP $tag (no checkpoint)"; continue; }
+    echo "##### accuracy: $tag #####"
+    python -u -m av_ib.eval.eval_v6_heldout \
+        --ann-path "$ANN_VAL" --video-root "$VIDEO_ROOT" --dataset avqa \
+        --variant b_topk_nofusion \
+        --label "avqa_$tag" --ckpt-path "$CKPT" \
+        --out-dir runs/avqa/eval \
+        --num-samples 300 --seed 99 --train-max-samples 0
+done
+echo "##### accuracy: untrained reference #####"
+python -u -m av_ib.eval.eval_v6_heldout \
+    --ann-path "$ANN_VAL" --video-root "$VIDEO_ROOT" --dataset avqa \
+    --variant b_topk_nofusion \
+    --label avqa_untrained \
+    --out-dir runs/avqa/eval \
+    --num-samples 300 --seed 99 --train-max-samples 0
+
+# risk-coverage: abstention checkpoints
+declare -A VARIANT=(
+    [video_bottleneck_dpo]=b_video_only
+    [video_bottleneck_sft]=b_video_only
+    [av_bottleneck_dpo]=b_topk_nofusion
+)
+for tag in video_bottleneck_dpo video_bottleneck_sft av_bottleneck_dpo; do
+    CKPT="runs/avqa/${tag}_final.pt"
+    [ -f "$CKPT" ] || { echo "SKIP $tag (no checkpoint)"; continue; }
+    echo "##### risk-coverage: $tag #####"
+    python -u -m av_ib.eval.eval_riskcoverage \
+        --ann-path "$ANN_VAL" --video-root "$VIDEO_ROOT" --dataset avqa \
+        --variant "${VARIANT[$tag]}" --ckpt-path "$CKPT" \
+        --num-samples 150 --seed 99 --every 15 \
+        --out-json "runs/avqa/eval/${tag}_riskcoverage.json"
+done
+
+echo "=== Done $(date) ==="

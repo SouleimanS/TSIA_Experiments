@@ -114,6 +114,8 @@ def run_one(model, rec, corr_mode: str, gold: str) -> dict:
 def main():
     ap = argparse.ArgumentParser(description="Risk-coverage eval for abstention models")
     ap.add_argument("--ann-path", required=True)
+    ap.add_argument("--dataset", choices=["musicavqa", "avqa", "avhbench"],
+                    default="musicavqa")
     ap.add_argument("--video-root", required=True)
     ap.add_argument("--variant", default="b_video_only")
     ap.add_argument("--ckpt-path", default=None)
@@ -124,7 +126,7 @@ def main():
     args = ap.parse_args()
 
     from av_ib.model.av_model_v6 import AVModelV6
-    from av_ib.data.musicavqa import MusicAVQADataset
+
 
     tag = "untrained" if not args.ckpt_path else args.ckpt_path
     print(f"Building AVModelV6 (variant={args.variant}, ckpt={tag})...", flush=True)
@@ -138,7 +140,15 @@ def main():
         n_ok = sum(1 for k, v in sd.items() if k in own and not own[k].data.copy_(v.data) is None)
         print(f"  loaded {n_ok}/{len(sd)} params", flush=True)
 
-    ds = MusicAVQADataset(args.ann_path, args.video_root)
+    if args.dataset == "avqa":
+        from av_ib.data.avqa import AVQADataset
+        ds = AVQADataset(args.ann_path, args.video_root)
+    elif args.dataset == "avhbench":
+        from av_ib.data.avhbench_qa import AVHBenchQADataset
+        ds = AVHBenchQADataset(args.ann_path, args.video_root, split="eval")
+    else:
+        from av_ib.data.musicavqa import MusicAVQADataset
+        ds = MusicAVQADataset(args.ann_path, args.video_root)
     rng = random.Random(args.seed)
     idxs = sorted(rng.sample(range(len(ds)), min(args.num_samples, len(ds))))
     print(f"Evaluating {len(idxs)} samples × {len(ALL_CORRS)} corruptions\n", flush=True)

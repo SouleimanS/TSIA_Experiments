@@ -1,0 +1,37 @@
+#!/bin/bash
+#PBS -N avqa_avvib_dpo
+#PBS -P gae50891
+#PBS -q rt_HF
+#PBS -l select=1
+#PBS -l walltime=06:00:00
+#PBS -j oe
+#PBS -o avqa_avvib_dpo.qsub.log
+
+# Condition 3: video+audio bottleneck (both VIBs trainable, frozen LLM) with DPO.
+
+set -euo pipefail
+cd "$PBS_O_WORKDIR"
+mkdir -p "$PBS_O_WORKDIR/runs/avqa"
+source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
+conda activate av_ib
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+echo "=== Node: $(hostname)  Date: $(date) ==="
+nvidia-smi -L
+
+ANN_TRAIN="$HOME/SOULEIMAN_repo/datasets/AVQA/train_qa.json"
+ANN_VAL="$HOME/SOULEIMAN_repo/datasets/AVQA/val_qa.json"
+VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVQA/videos"
+[ -f "$ANN_TRAIN" ] || { echo "ERROR: $ANN_TRAIN missing — run 1_download_dataset.py" >&2; exit 1; }
+exec > >(tee -a "$PBS_O_WORKDIR/runs/avqa/avqa_avvib_dpo_out.txt") 2>&1
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+LABELS="$PBS_O_WORKDIR/runs/avqa/abstention_labels.json"
+[ -f "$LABELS" ] || { echo "ERROR: $LABELS missing — run 2_mine_abstention_labels first." >&2; exit 1; }
+python -u -m av_ib.train.train_dpo \
+    --labels-json "$LABELS" --video-root "$VIDEO_ROOT" \
+    --variant b_topk_nofusion \
+    --num-steps 400 --beta-dpo 0.1 --lr 5e-5 --anchor-ratio 1.0 \
+    --log-path runs/avqa/av_bottleneck_dpo.jsonl \
+    --ckpt-path runs/avqa/av_bottleneck_dpo_final.pt
+
+echo "=== Done $(date) ==="

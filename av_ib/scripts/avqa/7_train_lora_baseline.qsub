@@ -1,0 +1,37 @@
+#!/bin/bash
+#PBS -N avqa_lora_baseline
+#PBS -P gae50891
+#PBS -q rt_HF
+#PBS -l select=1
+#PBS -l walltime=06:00:00
+#PBS -j oe
+#PBS -o avqa_lora_baseline.qsub.log
+
+# Condition 5: vanilla Qwen3-Omni + LoRA on AVQA (no bottleneck) — the
+uncompressed reference point.
+
+set -euo pipefail
+cd "$PBS_O_WORKDIR"
+mkdir -p "$PBS_O_WORKDIR/runs/avqa"
+source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
+conda activate av_ib
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+echo "=== Node: $(hostname)  Date: $(date) ==="
+nvidia-smi -L
+
+ANN_TRAIN="$HOME/SOULEIMAN_repo/datasets/AVQA/train_qa.json"
+ANN_VAL="$HOME/SOULEIMAN_repo/datasets/AVQA/val_qa.json"
+VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVQA/videos"
+[ -f "$ANN_TRAIN" ] || { echo "ERROR: $ANN_TRAIN missing — run 1_download_dataset.py" >&2; exit 1; }
+exec > >(tee -a "$PBS_O_WORKDIR/runs/avqa/avqa_lora_baseline_out.txt") 2>&1
+
+export CUDA_VISIBLE_DEVICES=0
+python -u -m av_ib.train.train_baseline \
+    --dataset avqa \
+    --ann-path "$ANN_TRAIN" --video-root "$VIDEO_ROOT" \
+    --num-steps 2000 --lr 1e-4 \
+    --log-path runs/avqa/lora_baseline.jsonl \
+    --ckpt-path runs/avqa/lora_baseline_final.pt \
+    --save-every 500 --print-every 50
+
+echo "=== Done $(date) ==="

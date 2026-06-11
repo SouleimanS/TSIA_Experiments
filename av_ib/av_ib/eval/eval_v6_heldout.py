@@ -35,12 +35,22 @@ import torch
 # Dataset helpers
 # ---------------------------------------------------------------------------
 
+def _make_dataset(dataset: str, ann_path: str, video_root: str):
+    if dataset == "avqa":
+        from av_ib.data.avqa import AVQADataset
+        return AVQADataset(ann_path, video_root)
+    if dataset == "avhbench":
+        from av_ib.data.avhbench_qa import AVHBenchQADataset
+        return AVHBenchQADataset(ann_path, video_root, split="eval")
+    from av_ib.data.musicavqa import MusicAVQADataset
+    return MusicAVQADataset(ann_path, video_root)
+
+
 def _build_heldout(ann_path: str, video_root: str,
                    train_max: int, train_seed: int,
-                   eval_n: int, eval_seed: int) -> tuple:
+                   eval_n: int, eval_seed: int, dataset: str = "musicavqa") -> tuple:
     """Return (dataset, heldout_indices)."""
-    from av_ib.data.musicavqa import MusicAVQADataset
-    ds = MusicAVQADataset(ann_path, video_root)
+    ds = _make_dataset(dataset, ann_path, video_root)
     all_idx = list(range(len(ds)))
     train_rng = random.Random(train_seed)
     train_set = set(train_rng.sample(all_idx, min(train_max, len(all_idx))))
@@ -248,6 +258,8 @@ def _print_comparison(entries: list[tuple[str, dict]]) -> None:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ann-path",            required=True)
+    ap.add_argument("--dataset", choices=["musicavqa", "avqa", "avhbench"],
+                    default="musicavqa")
     ap.add_argument("--video-root",          required=True)
     ap.add_argument("--variant",             default="b_topk_nofusion")
     ap.add_argument("--ckpt-path",           default=None,
@@ -269,7 +281,7 @@ def main():
     ds, idxs = _build_heldout(
         args.ann_path, args.video_root,
         args.train_max_samples, args.train_seed,
-        args.num_samples, args.seed,
+        args.num_samples, args.seed, dataset=args.dataset,
     )
 
     model   = _load_model(args.variant, args.ckpt_path)
