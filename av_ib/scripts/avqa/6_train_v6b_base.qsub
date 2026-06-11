@@ -16,6 +16,8 @@ mkdir -p "$PBS_O_WORKDIR/runs/avqa"
 source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
 conda activate av_ib
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
 echo "=== Node: $(hostname)  Date: $(date) ==="
 nvidia-smi -L
 

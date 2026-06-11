@@ -180,7 +180,14 @@ class QwenOmniWrapper(nn.Module):
             padding=True,
             use_audio_in_video=True,
         )
-        inputs = inputs.to(self.model.device).to(self.model.dtype)
+        # With device_map="auto" the model spans multiple GPUs; move inputs to
+        # the first real device (where embeddings live) not self.model.device
+        # which may report "meta" or cuda:0 regardless of actual shard layout.
+        first_device = next(self.model.parameters()).device
+        inputs = {k: v.to(first_device) if isinstance(v, torch.Tensor) else v
+                  for k, v in inputs.items()}
+        inputs = {k: v.to(self.model.dtype) if isinstance(v, torch.Tensor) and v.is_floating_point() else v
+                  for k, v in inputs.items()}
 
         # Find the END of the assistant-turn opener in the actual token sequence.
         # The marker is "<|im_start|>assistant\n" = tokens [151644, 77091, 198].
