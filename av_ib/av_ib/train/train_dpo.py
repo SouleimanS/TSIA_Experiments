@@ -63,7 +63,9 @@ def _seq_logprob(model, video_path: str, prompt: str, response: str,
         R = resp_ids.shape[1]
         pred_logits = logits[:, n_prompt - 1: n_prompt - 1 + R, :]
         logp = F.log_softmax(pred_logits.float(), dim=-1)
-        tok_logp = logp.gather(-1, resp_ids.unsqueeze(-1)).squeeze(-1)  # (1, R)
+        # with device_map sharding, logits live on the last shard, not cuda:0
+        idx = resp_ids.unsqueeze(-1).to(logp.device)
+        tok_logp = logp.gather(-1, idx).squeeze(-1)  # (1, R)
         return tok_logp.sum()
 
     try:
