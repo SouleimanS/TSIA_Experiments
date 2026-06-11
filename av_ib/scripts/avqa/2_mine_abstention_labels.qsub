@@ -23,7 +23,7 @@ ANN_TRAIN="$HOME/SOULEIMAN_repo/datasets/AVQA/train_qa.json"
 ANN_VAL="$HOME/SOULEIMAN_repo/datasets/AVQA/val_qa.json"
 VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVQA/videos"
 [ -f "$ANN_TRAIN" ] || { echo "ERROR: $ANN_TRAIN missing — run 1_download_dataset.py" >&2; exit 1; }
-N_CLIPS=$(ls "$VIDEO_ROOT" 2>/dev/null | wc -l)
+N_CLIPS=$(find "$VIDEO_ROOT" -name "*.mp4" | wc -l)
 [ "$N_CLIPS" -ge 20000 ] || { echo "ERROR: only $N_CLIPS clips in $VIDEO_ROOT — wait for 1_download_dataset.py to finish." >&2; exit 1; }
 exec > >(tee -a "$PBS_O_WORKDIR/runs/avqa/avqa_mine_labels_out.txt") 2>&1
 
@@ -31,7 +31,7 @@ export CUDA_VISIBLE_DEVICES=0
 python -u -m av_ib.eval.explain alabels \
     --ann-path "$ANN_TRAIN" --video-root "$VIDEO_ROOT" --dataset avqa \
     --variant b_video_only \
-    --num-samples 3000 --seed 42 --every 50 \
+    --num-samples 5000 --seed 99 --every 50 \
     --out-json runs/avqa/abstention_labels.json
 
 echo "=== Done $(date) ==="
