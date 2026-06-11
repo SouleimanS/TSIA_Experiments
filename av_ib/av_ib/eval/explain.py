@@ -110,7 +110,6 @@ def _type_key(meta: dict) -> str:
 # ---------------------------------------------------------------------------
 def run_e1(args):
     from av_ib.model.av_model_v6 import AVModelV6
-    from av_ib.data.musicavqa import MusicAVQADataset
     import random
 
     tag = "untrained" if not args.ckpt_path else f"ckpt={args.ckpt_path}"
@@ -129,7 +128,12 @@ def run_e1(args):
                 n_ok += 1
         print(f"  loaded {n_ok}/{len(sd)} params from checkpoint", flush=True)
 
-    ds = MusicAVQADataset(args.ann_path, args.video_root)
+    if getattr(args, "dataset", "musicavqa") == "avqa":
+        from av_ib.data.avqa import AVQADataset
+        ds = AVQADataset(args.ann_path, args.video_root)
+    else:
+        from av_ib.data.musicavqa import MusicAVQADataset
+        ds = MusicAVQADataset(args.ann_path, args.video_root)
     rng = random.Random(args.seed)
     idxs = sorted(rng.sample(range(len(ds)), min(args.num_samples, len(ds))))
     print(f"Probing {len(idxs)} samples; conditions={CONDITIONS}\n", flush=True)
@@ -276,7 +280,7 @@ def run_avhard(args):
 
     ds = MusicAVQADataset(args.ann_path, args.video_root)
     # question_id -> raw record, for writing the output subset in source schema
-    raw_by_qid = {r["question_id"]: r for r in ds.records}
+    raw_by_qid = {r.get("question_id"): r for r in ds.records}
 
     rng = random.Random(args.seed)
     idxs = sorted(rng.sample(range(len(ds)), min(args.num_samples, len(ds))))
@@ -362,7 +366,6 @@ def run_avhard(args):
 # ---------------------------------------------------------------------------
 def run_alabels(args):
     from av_ib.model.av_model_v6 import AVModelV6
-    from av_ib.data.musicavqa import MusicAVQADataset
     import random
 
     tag = "untrained" if not args.ckpt_path else f"ckpt={args.ckpt_path}"
@@ -379,8 +382,13 @@ def run_alabels(args):
             if k in own:
                 own[k].data.copy_(v.data)
 
-    ds = MusicAVQADataset(args.ann_path, args.video_root)
-    raw_by_qid = {r["question_id"]: r for r in ds.records}
+    if getattr(args, "dataset", "musicavqa") == "avqa":
+        from av_ib.data.avqa import AVQADataset
+        ds = AVQADataset(args.ann_path, args.video_root)
+    else:
+        from av_ib.data.musicavqa import MusicAVQADataset
+        ds = MusicAVQADataset(args.ann_path, args.video_root)
+    raw_by_qid = {r.get("question_id"): r for r in ds.records}
     rng = random.Random(args.seed)
     idxs = sorted(rng.sample(range(len(ds)), min(args.num_samples, len(ds))))
 
@@ -434,14 +442,19 @@ def run_alabels(args):
         if id_ok and vid_flips and not aud_flips:
             n_contrast += 1
 
-        if qid in raw_by_qid:
-            entry = dict(raw_by_qid[qid])
-            entry["identity_correct"] = id_ok
-            entry["flips_vid_zero"] = flips["vid_zero"]
-            entry["flips_vid_mean"] = flips["vid_mean"]
-            entry["flips_aud_zero"] = flips["aud_zero"]
-            entry["flips_aud_mean"] = flips["aud_mean"]
-            out.append(entry)
+        # Self-contained record: prompt/video_path/answer are written explicitly
+        # so downstream consumers (dpo_data.build_pairs) work for any dataset
+        # schema without re-rendering the question.
+        entry = dict(raw_by_qid.get(qid, {}))
+        entry["prompt"] = rec["prompt"]
+        entry["video_path"] = rec["video_path"]
+        entry["answer"] = rec["answer"]
+        entry["identity_correct"] = id_ok
+        entry["flips_vid_zero"] = flips["vid_zero"]
+        entry["flips_vid_mean"] = flips["vid_mean"]
+        entry["flips_aud_zero"] = flips["aud_zero"]
+        entry["flips_aud_mean"] = flips["aud_mean"]
+        out.append(entry)
 
         if (s + 1) % args.every == 0:
             print(f"  [{s+1}/{len(idxs)}] id_correct={n_id_correct} "
@@ -478,6 +491,9 @@ def main():
     e1 = sub.add_parser("e1", help="AV-reliance ablation (the gate)")
     e1.add_argument("--ann-path", required=True)
     e1.add_argument("--video-root", required=True)
+    e1.add_argument("--dataset", choices=["musicavqa", "avqa"], default="musicavqa",
+                    help="Annotation schema: musicavqa (templated) or avqa "
+                         "(VGGSound-based multi-choice).")
     e1.add_argument("--variant", default="b_topk_nofusion")
     e1.add_argument("--ckpt-path", default=None,
                     help="If set, load this checkpoint (and enable LoRA). "
@@ -505,6 +521,9 @@ def main():
     al = sub.add_parser("alabels", help="Emit empirical abstention-training labels")
     al.add_argument("--ann-path", required=True)
     al.add_argument("--video-root", required=True)
+    al.add_argument("--dataset", choices=["musicavqa", "avqa"], default="musicavqa",
+                    help="Annotation schema: musicavqa (templated) or avqa "
+                         "(VGGSound-based multi-choice).")
     al.add_argument("--variant", default="b_topk_nofusion")
     al.add_argument("--ckpt-path", default=None,
                     help="Default: untrained vanilla model (label with the model "
