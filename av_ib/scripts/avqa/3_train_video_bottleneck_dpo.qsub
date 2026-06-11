@@ -22,6 +22,8 @@ ANN_TRAIN="$HOME/SOULEIMAN_repo/datasets/AVQA/train_qa.json"
 ANN_VAL="$HOME/SOULEIMAN_repo/datasets/AVQA/val_qa.json"
 VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVQA/videos"
 [ -f "$ANN_TRAIN" ] || { echo "ERROR: $ANN_TRAIN missing — run 1_download_dataset.py" >&2; exit 1; }
+N_CLIPS=$(ls "$VIDEO_ROOT" 2>/dev/null | wc -l)
+[ "$N_CLIPS" -ge 20000 ] || { echo "ERROR: only $N_CLIPS clips in $VIDEO_ROOT — wait for 1_download_dataset.py to finish." >&2; exit 1; }
 exec > >(tee -a "$PBS_O_WORKDIR/runs/avqa/avqa_vidvib_dpo_out.txt") 2>&1
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
