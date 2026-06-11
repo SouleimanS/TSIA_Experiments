@@ -1,4 +1,4 @@
-# Python
+# === Python ===
 __pycache__/
 *.pyc
 *.pyo
@@ -7,104 +7,61 @@ __pycache__/
 *.egg-info/
 .ipynb_checkpoints/
 
-# Training outputs / logs (regenerable, often huge)
+# === Training outputs / logs (regenerable, often huge) ===
 *.jsonl
-*_log.jsonl
 predictions_*.csv
 checkpoints/
 runs/
 wandb/
 
-# Model weights and large binaries
+# === Model weights and large binaries ===
 *.pth
 *.pt
 *.bin
 *.safetensors
 *.ckpt
 
-# Data
+# === Data (videos / audio / arrays — never tracked) ===
 *.mp4
 *.wav
 *.mp3
 *.npy
 *.npz
 
-# IDE / env
+# === IDE / env ===
 .vscode/
 .idea/
 .env
 .envrc
 
-# OS junk
+# === OS junk ===
 .DS_Store
 Thumbs.db
 
-# AVHBench heavy artifacts (not tracked)
+# === AVHBench heavy artifacts ===
 avhbench/AVHBench-Align-FT/bert-base-uncased/
 avhbench/AVHBench-Align-FT/models/
 avhbench/AVHBench-Align-FT/instruction-dataset/
-avhbench/AVHBench-Align-FT/predictions_*.csv
-avhbench/data/AVHBench_v0/
-avhbench/**/*.log
-avhbench/**/*.log.attempt*
-avhbench/**/*.pid
-avhbench/**/*.jsonl
-
-# AVHBench heavy artifacts (not tracked)
-avhbench/AVHBench-Align-FT/bert-base-uncased/
-avhbench/AVHBench-Align-FT/models/
-avhbench/AVHBench-Align-FT/instruction-dataset/
-avhbench/AVHBench-Align-FT/predictions_*.csv
-avhbench/data/AVHBench_v0/
-avhbench/**/*.log
-avhbench/**/*.log.attempt*
-avhbench/**/*.pid
-avhbench/**/*.jsonl
-
-# AVHBench heavy artifacts (not tracked)
-avhbench/AVHBench-Align-FT/bert-base-uncased/
-avhbench/AVHBench-Align-FT/models/
-avhbench/AVHBench-Align-FT/instruction-dataset/
-avhbench/AVHBench-Align-FT/predictions_*.csv
-avhbench/data/AVHBench_v0/
-avhbench/**/*.log
-avhbench/**/*.log.attempt*
-avhbench/**/*.pid
-avhbench/**/*.jsonl
-
-# AVHBench heavy artifacts (never tracked)
-avhbench/AVHBench-Align-FT/bert-base-uncased/
-avhbench/AVHBench-Align-FT/models/
-avhbench/AVHBench-Align-FT/instruction-dataset/
-avhbench/AVHBench-Align-FT/predictions_*.csv
 avhbench/data/AVHBench_v0/
 avhbench/**/videos/
-avhbench/**/*.mp4
-avhbench/**/*.wav
-avhbench/**/*.pth
-avhbench/**/*.bin
-avhbench/**/*.safetensors
 avhbench/**/*.log
 avhbench/**/*.log.attempt*
 avhbench/**/*.pid
-avhbench/**/*.jsonl
-avhbench/**/__pycache__/
 
-# AV-IB project-specific
+# === AV-IB project-specific scratch ===
 av_ib/*.qsub.log
 av_ib/bad_videos.txt
 av_ib/bad_videos_scan.log
 av_ib/results/*.csv
 av_ib/data/combined_train.json
-
-# Scratch backups from in-place editing
-*.bak
-
-# Un-ignore the experimental snapshot logs (committed to preserve results)
-!av_ib/results/logs_snapshot_*/
-!av_ib/results/logs_snapshot_*/**/*.jsonl
 av_ib/_archive.tar.gz
 av_ib/_archive/
-**/__pycache__/
-*.pyc
+
+# === Scratch backups from in-place editing ===
+*.bak
+
+# === Un-ignore the experimental snapshot logs (committed to preserve results) ===
+!av_ib/results/logs_snapshot_*/
+!av_ib/results/logs_snapshot_*/**/*.jsonl
+
 .claude/worktrees/

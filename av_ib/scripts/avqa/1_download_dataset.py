@@ -90,14 +90,9 @@ def main():
                   if f.endswith((".tar.gz", ".tar")))
     print(f"{len(tars)} tarballs in {HF_REPO}")
 
-    n_extracted = 0
-    for t in tars:
-        if len(have) >= len(needed):
-            break
-        print(f"--- {t} ---", flush=True)
-        local = hf_hub_download(HF_REPO, t, repo_type="dataset",
-                                local_dir=scratch)
+    def extract_tar(local: str) -> int:
         mode = "r:gz" if local.endswith(".gz") else "r"
+        n = 0
         with tarfile.open(local, mode) as tf:
             for m in tf:
                 if not m.isfile():
@@ -108,10 +103,41 @@ def main():
                     with tf.extractfile(m) as src, open(dst, "wb") as f:
                         f.write(src.read())
                     have.add(key)
-                    n_extracted += 1
-        Path(local).unlink()  # free scratch before the next tar
+                    n += 1
+        return n
+
+    n_extracted = 0
+    failed_tars = []
+    for t in tars:
+        if len(have) >= len(needed):
+            break
+        print(f"--- {t} ---", flush=True)
+        # A cached tarball can be truncated/corrupt (interrupted download):
+        # on decompression error, delete it, force a fresh download, retry once.
+        ok = False
+        for attempt in range(2):
+            local = hf_hub_download(
+                HF_REPO, t, repo_type="dataset", local_dir=scratch,
+                force_download=(attempt > 0))
+            try:
+                n_extracted += extract_tar(local)
+                ok = True
+                break
+            except Exception as e:  # zlib.error, tarfile.TarError, EOFError…
+                print(f"  CORRUPT ({type(e).__name__}: {e}) — "
+                      f"{'re-downloading' if attempt == 0 else 'giving up'}",
+                      flush=True)
+                Path(local).unlink(missing_ok=True)
+        if not ok:
+            failed_tars.append(t)
+        else:
+            Path(local).unlink(missing_ok=True)  # free scratch
         print(f"  extracted so far: {n_extracted} "
               f"({len(have)}/{len(needed)} needed clips present)", flush=True)
+
+    if failed_tars:
+        print(f"WARNING: {len(failed_tars)} tarball(s) skipped after retry: "
+              f"{failed_tars}")
 
     missing = sorted(needed[k] for k in set(needed) - have)
     (out / "missing_clips.txt").write_text("\n".join(missing))
