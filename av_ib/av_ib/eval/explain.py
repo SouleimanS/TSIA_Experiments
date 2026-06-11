@@ -131,6 +131,10 @@ def run_e1(args):
     if getattr(args, "dataset", "musicavqa") == "avqa":
         from av_ib.data.avqa import AVQADataset
         ds = AVQADataset(args.ann_path, args.video_root)
+    elif getattr(args, "dataset", "musicavqa") == "avhbench":
+        from av_ib.data.avhbench_qa import AVHBenchQADataset
+        ds = AVHBenchQADataset(args.ann_path, args.video_root,
+                               split=getattr(args, "split", "train"))
     else:
         from av_ib.data.musicavqa import MusicAVQADataset
         ds = MusicAVQADataset(args.ann_path, args.video_root)
@@ -385,6 +389,10 @@ def run_alabels(args):
     if getattr(args, "dataset", "musicavqa") == "avqa":
         from av_ib.data.avqa import AVQADataset
         ds = AVQADataset(args.ann_path, args.video_root)
+    elif getattr(args, "dataset", "musicavqa") == "avhbench":
+        from av_ib.data.avhbench_qa import AVHBenchQADataset
+        ds = AVHBenchQADataset(args.ann_path, args.video_root,
+                               split=getattr(args, "split", "train"))
     else:
         from av_ib.data.musicavqa import MusicAVQADataset
         ds = MusicAVQADataset(args.ann_path, args.video_root)
@@ -491,9 +499,11 @@ def main():
     e1 = sub.add_parser("e1", help="AV-reliance ablation (the gate)")
     e1.add_argument("--ann-path", required=True)
     e1.add_argument("--video-root", required=True)
-    e1.add_argument("--dataset", choices=["musicavqa", "avqa"], default="musicavqa",
-                    help="Annotation schema: musicavqa (templated) or avqa "
-                         "(VGGSound-based multi-choice).")
+    e1.add_argument("--dataset", choices=["musicavqa", "avqa", "avhbench"], default="musicavqa",
+                    help="Annotation schema: musicavqa (templated), avqa "
+                         "(VGGSound multi-choice), or avhbench (binary AV QA).")
+    e1.add_argument("--split", choices=["train", "eval", "all"], default="train",
+                    help="avhbench only: video-level split to draw from.")
     e1.add_argument("--variant", default="b_topk_nofusion")
     e1.add_argument("--ckpt-path", default=None,
                     help="If set, load this checkpoint (and enable LoRA). "
@@ -521,9 +531,11 @@ def main():
     al = sub.add_parser("alabels", help="Emit empirical abstention-training labels")
     al.add_argument("--ann-path", required=True)
     al.add_argument("--video-root", required=True)
-    al.add_argument("--dataset", choices=["musicavqa", "avqa"], default="musicavqa",
-                    help="Annotation schema: musicavqa (templated) or avqa "
-                         "(VGGSound-based multi-choice).")
+    al.add_argument("--dataset", choices=["musicavqa", "avqa", "avhbench"], default="musicavqa",
+                    help="Annotation schema: musicavqa (templated), avqa "
+                         "(VGGSound multi-choice), or avhbench (binary AV QA).")
+    al.add_argument("--split", choices=["train", "eval", "all"], default="train",
+                    help="avhbench only: video-level split to draw from.")
     al.add_argument("--variant", default="b_topk_nofusion")
     al.add_argument("--ckpt-path", default=None,
                     help="Default: untrained vanilla model (label with the model "
