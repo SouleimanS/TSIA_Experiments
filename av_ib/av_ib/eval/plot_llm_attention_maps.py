@@ -64,23 +64,28 @@ def _attn_row(q: torch.Tensor, k: torch.Tensor,
               q_pos: int, vis_pos: torch.Tensor, n_heads: int) -> np.ndarray:
     """Compute attention weights for token q_pos over vis_pos tokens.
 
-    q, k: (1, L, D) or (L, D) — full sequence Q/K projections.
-    Returns (n_vis,) float32 numpy saliency (mean over heads).
+    q: (1, L, n_heads*head_dim) or (L, n_heads*head_dim)
+    k: (1, L, n_kv_heads*head_dim) — GQA: n_kv_heads may differ from n_heads.
+    Returns (n_vis,) float32 numpy saliency (mean over query heads).
     """
     if q.dim() == 2:
         q = q.unsqueeze(0)
         k = k.unsqueeze(0)
-    B, L, D = q.shape
-    head_dim = D // n_heads
-    # Reshape to (B, n_heads, L, head_dim)
-    q = q.view(B, L, n_heads, head_dim).permute(0, 2, 1, 3)
-    k = k.view(B, L, n_heads, head_dim).permute(0, 2, 1, 3)
+    B, L, Dq = q.shape
+    Dk = k.shape[-1]
+    head_dim = Dq // n_heads
+    n_kv_heads = Dk // head_dim
+    groups = n_heads // n_kv_heads   # queries per KV head
+
+    q = q.view(B, L, n_heads, head_dim).permute(0, 2, 1, 3)        # (B, H, L, d)
+    k = k.view(B, L, n_kv_heads, head_dim).permute(0, 2, 1, 3)     # (B, Hkv, L, d)
+    # expand K to match Q heads (GQA repeat)
+    k = k.repeat_interleave(groups, dim=1)                           # (B, H, L, d)
+
     scale = head_dim ** -0.5
-    # (B, n_heads, L)
     scores = (q[:, :, q_pos:q_pos+1, :] @ k.transpose(-2, -1)).squeeze(-2) * scale
-    attn = F.softmax(scores.float(), dim=-1)   # (B, n_heads, L)
-    # gather visual columns then mean over heads and batch
-    vis_attn = attn[0, :, vis_pos.to(attn.device)]   # (n_heads, n_vis)
+    attn = F.softmax(scores.float(), dim=-1)   # (B, H, L)
+    vis_attn = attn[0, :, vis_pos.to(attn.device)]   # (H, n_vis)
     return vis_attn.mean(dim=0).cpu().numpy()
 
 
