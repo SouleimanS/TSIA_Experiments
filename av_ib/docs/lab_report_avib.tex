@@ -3,12 +3,13 @@
 \usepackage{booktabs}
 \usepackage{microtype}
 \usepackage{parskip}
-\usepackage{hyperref}
-\usepackage{xcolor}
 \usepackage{amsmath,amssymb}
 \usepackage{caption}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{xcolor}
 \usepackage{tikz}
-\usetikzlibrary{arrows.meta, positioning, fit, shapes.geometric}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,calc}
 \usepackage[numbers,sort&compress]{natbib}
 
 \title{\textbf{Audio-Visual Information Bottleneck with Qwen3-Omni}\\
@@ -24,126 +25,276 @@
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Motivation}
 
-Large audio-visual language models generate confident responses even when a
-required modality is absent or corrupted.  This \emph{hallucination under
-modal degradation} is well-documented: models trained to always answer learn
-to ignore missing evidence and rely on language priors instead
-\cite{mad2026,dpa2026}.  We address this with a \textbf{fail-safe mechanism}:
-the model should abstain when its bottlenecked representation carries too
-little task-relevant information, rather than guess.
+Large audio-visual language models tend to produce confident responses even
+when a required modality is absent or corrupted.
+This \emph{hallucination under modal degradation} is the focus of recent
+training-free mitigation work: MAD~\cite{mad2026} addresses it through
+modality-aware contrastive decoding on AVHBench, while DPA~\cite{dpa2026}
+perturbs attention queries to reduce cross-modal spurious dependencies.
+Both methods intervene at inference time without modifying model weights.
 
-The approach builds on two ideas:
-(i) the \textbf{Variational Information Bottleneck} (VIB) \cite{alemi2017vib},
-which learns a compressed stochastic representation $Z$ of an input modality
-by trading off task accuracy against channel capacity; and
-(ii) \textbf{Direct Preference Optimization} (DPO) \cite{rafailov2023dpo},
-which steers the model's output distribution toward abstention on corrupted
-inputs without explicit reward modelling.
+We take a complementary \emph{trained} approach: compress the video channel
+through a Variational Information Bottleneck~\cite{alemi2017vib} so that the
+model is structurally uncertain about the video stream when it carries
+corrupted or uninformative content, then teach the model to \emph{abstain}
+under that uncertainty via Direct Preference Optimization~\cite{rafailov2023dpo}.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Background}
+
+\subsection{Variational Information Bottleneck}
+
+Alemi et al.~\cite{alemi2017vib} formulate representation learning as a
+rate-distortion problem.  Given input $X$ and label $Y$, a stochastic encoder
+$q_\phi(Z|X)$ is trained to compress $X$ into $Z$ while retaining task-relevant
+information:
+\[
+  \min_\phi \;\underbrace{I(Z;X)}_{\text{rate}} - \beta\,\underbrace{I(Z;Y)}_{\text{distortion}^{-1}}
+\]
+Under a diagonal Gaussian encoder $q_\phi(Z|X) = \mathcal{N}(\mu_\phi(X),
+\operatorname{diag}(\sigma^2_\phi(X)))$ and a standard Gaussian prior $p(Z)
+= \mathcal{N}(0,I)$, the rate term is the closed-form KL divergence:
+\[
+  D_{\mathrm{KL}}(q_\phi(Z|X)\,\|\,p(Z))
+  = \frac{1}{2}\sum_d \left(\mu_d^2 + \sigma_d^2 - \log\sigma_d^2 - 1\right)
+\]
+and the distortion is minimised by maximising the log-likelihood of $Y$ given
+$Z$.  The combined objective is:
+\[
+  \mathcal{L}_{\mathrm{VIB}} = -\mathbb{E}_{q_\phi(Z|X)}\bigl[\log p_\theta(Y|Z)\bigr]
+    + \beta\,D_{\mathrm{KL}}\!\left(q_\phi(Z|X)\,\|\,\mathcal{N}(0,I)\right)
+\]
+At inference, noise is turned off ($z = \mu_\phi(X)$), and the magnitude of
+the KL term at test time serves as a \emph{confidence proxy}: a large
+posterior-to-prior gap means the video carried information; a small gap means
+it was uninformative or corrupted.
+
+\subsection{Direct Preference Optimization}
+
+Rafailov et al.~\cite{rafailov2023dpo} show that RLHF with a KL-constrained
+reward is equivalent to directly optimising a binary cross-entropy over
+preference pairs, bypassing explicit reward modelling:
+\[
+  \mathcal{L}_{\mathrm{DPO}} = -\mathbb{E}_{(x,y_w,y_l)}\!\left[
+    \log\sigma\!\left(
+      \beta\log\frac{\pi_\theta(y_w|x)}{\pi_{\mathrm{ref}}(y_w|x)}
+    - \beta\log\frac{\pi_\theta(y_l|x)}{\pi_{\mathrm{ref}}(y_l|x)}
+    \right)\right]
+\]
+where $y_w$ is the preferred (chosen) response, $y_l$ the dispreferred
+(rejected) response, and $\pi_{\mathrm{ref}}$ is the frozen reference policy.
+We use DPO to steer the bottlenecked model toward abstention on corrupted
+inputs without designing an explicit reward function.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Architecture}
 
 \subsection{Backbone: Qwen3-Omni-30B}
 
-The base model is \textbf{Qwen3-Omni-30B-A3B} \cite{qwen3omni2025}, a
-30B-parameter Mixture-of-Experts multimodal LLM with a native audio-visual
-encoder.  The model accepts interleaved video and audio tokens alongside text
-and autoregressively generates text responses.  We keep the entire backbone
-\emph{frozen} throughout all experiments; only the lightweight components
-described below are trained.
+The backbone is \textbf{Qwen3-Omni-30B-A3B-Instruct}~\cite{qwen3omni2025},
+a 30.2B-parameter Mixture-of-Experts multimodal language model with three
+sub-modules relevant here:
+\begin{itemize}
+  \item \textbf{Audio tower} (648M parameters): encodes the audio stream to
+        token sequences of dimension 2048.
+  \item \textbf{Visual encoder} (539M parameters): encodes video frames to
+        token sequences of dimension 2048.
+  \item \textbf{Thinker text model} (30.2B, MoE): a transformer decoder with
+        hidden size 2048 that attends over the interleaved audio/video/text
+        token sequence and generates the response.
+\end{itemize}
+All backbone components are kept \textbf{frozen}.  Low-rank adapters (LoRA,
+$r{=}16$, $\alpha{=}16$) are optionally added to the thinker's attention and
+MLP projections (\texttt{q\_proj}, \texttt{k\_proj}, \texttt{v\_proj},
+\texttt{o\_proj}, \texttt{linear\_fc1}, \texttt{linear\_fc2}); these account
+for $\approx 0.7$M trainable parameters out of 30B.
 
-\subsection{Video Information Bottleneck}
+\subsection{Token Injection via CMIBSplicer}
 
-A trainable \textbf{bottleneck head} is inserted between the frozen video
-encoder's output and the LLM's token sequence.  It parametrises a diagonal
-Gaussian over the video representation:
+A hook-based \texttt{CMIBSplicer} sits between the encoders and the thinker.
+It:
+\begin{enumerate}
+  \item Captures the encoder outputs ($z_a \in \mathbb{R}^{N_a \times 2048}$,
+        $z_v \in \mathbb{R}^{N_v \times 2048}$) and the placeholder masks that
+        locate audio/video token slots in the thinker's embedding matrix.
+  \item Passes the captured tensors to a \emph{provider} (the bottleneck
+        pipeline described below).
+  \item Writes the bottlenecked tokens back into the thinker's
+        \texttt{inputs\_embeds} via \texttt{masked\_scatter}, leaving text
+        tokens untouched.
+\end{enumerate}
+This design requires zero modifications to the frozen backbone's forward pass.
+
+\subsection{Sink-Aware Video Bottleneck (\texttt{SinkAwareVIB})}
+
+Not all token positions carry the same information.  Inspection of the visual
+encoder reveals two ``attention sink'' dimensions (indices 985 and 1992) that
+consistently receive anomalously large activation magnitudes and dominate the
+KL.  Applying a uniform KL pressure to these dimensions suppresses them
+without genuine compression, destabilising training.
+
+The \texttt{SinkAwareVIB} classifies each token as a \emph{sink} or
+\emph{non-sink} before applying the bottleneck:
 \[
-  q(z \mid v) = \mathcal{N}\!\left(\mu_\phi(v),\;\operatorname{diag}(\sigma^2_\phi(v))\right)
+  \phi_t = \max\!\left(\,|x_{t,985}|,\;|x_{t,1992}|\,\right),
+  \qquad
+  \text{sink}(t) = \mathbf{1}\!\left[\phi_t \geq \tau\right], \quad \tau = 18.0
 \]
-During training, $z \sim q(z|v)$ via the reparametrisation trick.  At
-inference (noise off), $z = \mu_\phi(v)$.  The bottleneck objective is:
+where $x_t$ is the RMS-normalised token vector.  Two independent residual
+bottleneck paths are applied (both zero-initialised so $z = x$ at step 0):
+\begin{align*}
+  \mu(x) &= x + W_\mu\,x, \\
+  \log\sigma^2(x) &= W_{\log\sigma}\,x\;\;\text{(clamped to }[-10,10]\text{)}.
+\end{align*}
+The KL penalty is then split by sink classification:
 \[
-  \mathcal{L} = \underbrace{\mathcal{L}_\text{NLL}(y \mid z, a, x)}_{\text{task accuracy}}
-              \;+\;\beta \cdot \underbrace{D_\text{KL}\!\left(q(z|v)\;\|\;\mathcal{N}(0,I)\right)}_{\text{video compression}}
+  \mathcal{L}_{\mathrm{KL}} =
+    \underbrace{\sum_{t:\,\neg\text{sink}} \mathrm{KL}_t}_{\text{non-sink tokens}}
+    + \;\alpha_s \cdot \underbrace{\sum_{t:\,\text{sink}} \mathrm{KL}_t}_{\text{sink tokens}},
+  \qquad \alpha_s = 0.01
 \]
-where $a$ is the audio stream and $x$ is the text prompt.  The KL term
-penalises information flowing through the video channel: under clean video
-$\beta$-KL is the rate cost; under corrupted video the posterior collapses
-toward the prior, making $z$ uninformative.
+Sink tokens thus receive $100\times$ lower KL pressure, allowing them to pass
+through essentially unchanged while the non-sink tokens are genuinely
+compressed.
+
+\subsection{Audio Bottleneck (\texttt{NormTopKSinkVIB} or identity)}
+
+The audio encoder has near-zero correlation ($\rho \approx -0.06$) with the
+video sink dimensions, so the dimension-based sink classifier is invalid for
+audio.  When an audio bottleneck is used (AV bottleneck variant), sink
+classification defaults to the top-40\% tokens by L2 norm:
+\[
+  \text{sink}(t) = \mathbf{1}\!\left[\|x_t\|_2 \geq \kappa_{0.6}(\{x\})\right]
+\]
+where $\kappa_{0.6}$ is the 60th-percentile norm threshold.  The
+KL split and residual paths are otherwise identical to the video bottleneck.
+In the \emph{video-only} variant the audio path is a pure identity (no
+bottleneck, no KL).
+
+\subsection{Optional Cross-Modal Fusion (\texttt{MutualCrossAttention})}
+
+After the per-modal bottlenecks, an optional symmetric cross-attention fusion
+module updates each modality's tokens using the other as context:
+\[
+  z_v' = z_v + \mathrm{Attn}(z_v,\,z_a),
+  \qquad
+  z_a' = z_a + \mathrm{Attn}(z_a,\,z_v)
+\]
+with pre-norm and a residual FFN, all zero-initialised (identity at step 0).
+The fusion uses $H{=}8$ attention heads and one block.  It is disabled in the
+\texttt{nofusion} variants used in these experiments.
 
 \begin{figure}[h]
 \centering
 \begin{tikzpicture}[
-  box/.style={draw, rounded corners=3pt, minimum width=2.2cm,
-              minimum height=0.75cm, align=center, font=\small},
-  arrow/.style={-{Latex[length=2mm]}, thick},
-  node distance=0.5cm and 1.0cm
+  enc/.style    ={draw, fill=blue!10,  rounded corners=2pt,
+                  minimum width=2.4cm, minimum height=0.65cm,
+                  align=center, font=\small},
+  vib/.style    ={draw, fill=orange!20, rounded corners=2pt,
+                  minimum width=2.6cm, minimum height=0.65cm,
+                  align=center, font=\small},
+  fuse/.style   ={draw, fill=purple!12, rounded corners=2pt,
+                  minimum width=2.6cm, minimum height=0.65cm,
+                  align=center, font=\small},
+  llm/.style    ={draw, fill=green!12,  rounded corners=2pt,
+                  minimum width=2.6cm, minimum height=2.4cm,
+                  align=center, font=\small},
+  out/.style    ={draw, fill=gray!12,  rounded corners=2pt,
+                  minimum width=2.0cm, minimum height=0.65cm,
+                  align=center, font=\small},
+  arr/.style    ={-{Latex[length=2mm]}, thick},
+  darr/.style   ={dashed, -{Latex[length=2mm]}, gray},
 ]
-  % inputs
-  \node[box, fill=blue!10]  (vid) {Video\\encoder};
-  \node[box, fill=blue!10, below=0.4cm of vid] (aud) {Audio\\encoder};
-  \node[box, fill=blue!10, below=0.4cm of aud] (txt) {Text\\tokeniser};
 
-  % bottleneck
-  \node[box, fill=orange!20, right=1.2cm of vid] (bn)
-        {Bottleneck\\$\mu_\phi,\sigma^2_\phi$};
-  \node[right=0.3cm of bn, font=\small] (sample) {$z\!\sim\!\mathcal{N}(\mu,\sigma^2)$};
+% ── encoders ──
+\node[enc] (venc) at (0, 1.4) {Visual\\encoder\\{\tiny $N_v{\times}2048$}};
+\node[enc] (aenc) at (0,-1.4) {Audio\\tower\\{\tiny $N_a{\times}2048$}};
 
-  % LLM
-  \node[box, fill=green!15, right=3.2cm of vid, yshift=-0.7cm, minimum width=2.6cm,
-        minimum height=2.2cm] (llm) {Qwen3-Omni\\30B\\(frozen)};
+% ── bottlenecks ──
+\node[vib, right=1.3cm of venc] (bv)
+      {SinkAwareVIB\\{\tiny dims 985,1992}\\{\tiny $\alpha_s{=}0.01$}};
+\node[vib, right=1.3cm of aenc] (ba)
+      {NormTopKVIB\\{\tiny top-40\% norm}\\or identity};
 
-  % output
-  \node[box, fill=gray!15, right=0.8cm of llm] (out) {Response\\/ Abstain};
+% ── fusion (optional) ──
+\node[fuse, right=1.2cm of bv, yshift=-1.4cm] (fuse)
+      {MutualCrossAttn\\{\tiny (disabled here)}};
 
-  % arrows
-  \draw[arrow] (vid) -- (bn);
-  \draw[arrow] (bn) -- (sample);
-  \draw[arrow] (sample.east) -| ([xshift=-0.1cm]llm.north west) -- (llm.north west);
-  \draw[arrow] (aud.east) -- ++(0.3,0) -| ([xshift=0.1cm]llm.west) -- (llm.west);
-  \draw[arrow] (txt.east) -- ++(0.3,0) -| ([xshift=0.1cm]llm.south west) -- (llm.south west);
-  \draw[arrow] (llm) -- (out);
+% ── concat + LLM ──
+\node[llm, right=1.3cm of fuse] (llm)
+      {Qwen3-Omni\\30B MoE\\(frozen)\\{\tiny LoRA on attn+MLP}};
 
-  % KL annotation
-  \draw[dashed, gray] (bn.south) -- ++(0,-0.4)
-    node[below, font=\footnotesize, gray] {$\beta\cdot D_\text{KL}$};
+% ── output ──
+\node[out, right=1.1cm of llm] (out) {Answer\\/ Abstain};
+
+% ── arrows ──
+\draw[arr] (venc) -- (bv);
+\draw[arr] (aenc) -- (ba);
+\draw[arr] (bv)   -- (fuse);
+\draw[arr] (ba)   -- (fuse);
+\draw[arr] (fuse) -- (llm);
+\draw[arr] (llm)  -- (out);
+
+% ── KL labels ──
+\node[font=\footnotesize, gray, above=0.05cm of bv] {$\beta_v \cdot \mathcal{L}_\mathrm{KL}^v$};
+\node[font=\footnotesize, gray, below=0.05cm of ba] {$\beta_a \cdot \mathcal{L}_\mathrm{KL}^a$};
+
+% ── splice annotation ──
+\draw[darr] (fuse.east) -- node[above, font=\footnotesize, gray]
+    {\texttt{masked\_scatter}} (llm.west);
+
 \end{tikzpicture}
-\caption{Architecture overview.  Only the bottleneck head ($\mu_\phi, \sigma^2_\phi$)
-and optional LoRA adapters are trainable; everything else is frozen.}
+\caption{Data flow.  Encoder outputs (2048-d token sequences) pass through
+modal bottlenecks.  The optional fusion module is disabled in all experiments
+reported here (\texttt{nofusion} variants).  The splicer writes bottlenecked
+tokens back into the frozen LLM's embedding sequence via \texttt{masked\_scatter}.}
 \end{figure}
 
-\subsection{Abstention Training (DPO)}
+\subsection{Training Objective}
 
-After the bottleneck pre-training, a DPO stage teaches the model \emph{when}
-to abstain.  Preference pairs are constructed by corrupting the video channel
-in three ways seen during training: zeroing all frames (\texttt{vid\_zero}),
-replacing with the channel mean (\texttt{vid\_mean}), and the clean original
-(\texttt{identity}).  For each pair the chosen response is abstention
-(``I can't tell'') on a corrupted input, and the rejected response is the
-model's own overconfident answer.  The DPO loss \cite{rafailov2023dpo} is:
+The full training loss is:
 \[
-  \mathcal{L}_\text{DPO} = -\mathbb{E}\!\left[
-    \log\sigma\!\left(\beta\log\frac{\pi_\theta(y_w|x)}{\pi_\text{ref}(y_w|x)}
-    - \beta\log\frac{\pi_\theta(y_l|x)}{\pi_\text{ref}(y_l|x)}\right)
-  \right]
+  \mathcal{L} = \mathcal{L}_{\mathrm{NLL}}
+    + \beta_v\,\mathcal{L}_{\mathrm{KL}}^v
+    + \beta_a\,\mathcal{L}_{\mathrm{KL}}^a
+    + \lambda_{\mathrm{aux}}\left(
+        \mathcal{L}_{\mathrm{aux}}^v + \mathcal{L}_{\mathrm{aux}}^a
+      \right)
 \]
-At evaluation, abstention is detected by teacher-forcing the NLL of three
-continuations --- the real answer options plus ``I can't tell'' --- and
-picking the minimum-NLL response.
+where $\mathcal{L}_{\mathrm{NLL}}$ is the teacher-forced NLL on the answer
+span, $\mathcal{L}_{\mathrm{KL}}^{v/a}$ are the bottleneck KL terms
+(with sink weighting), and $\mathcal{L}_{\mathrm{aux}}^{v/a}$ are auxiliary
+cross-entropy losses from linear heads on the video/audio bottleneck outputs
+(weight $\lambda_{\mathrm{aux}}{=}0.1$).  Training uses AdamW
+(lr$\,{=}10^{-4}$, weight decay $0.05$, gradient clip $1.0$).
+
+\subsection{Abstention Training}
+
+After bottleneck pre-training, a DPO stage teaches the model when to abstain.
+Preference pairs are mined from the training set: for each clean clip where the
+model answers correctly, two corrupted variants are generated
+(\texttt{vid\_zero}: all frames zeroed; \texttt{vid\_mean}: frames replaced by
+channel mean).  The chosen response is the abstain string
+(``I can't tell''); the rejected response is the model's overconfident answer
+under corruption.
+
+At evaluation, abstention is detected by teacher-forcing the NLL of each real
+answer option (A/B/C/D for AVQA; yes/no for AVHBench) plus the abstain string,
+and picking the minimum-NLL continuation.
 
 \subsection{Conditions}
 
 \begin{center}
-\begin{tabular}{lll}
+\begin{tabular}{llll}
 \toprule
-\textbf{Condition} & \textbf{Modalities bottlenecked} & \textbf{Training} \\
+\textbf{Label} & \textbf{Audio} & \textbf{Video} & \textbf{Training} \\
 \midrule
-Untrained baseline     & none & --- \\
-LoRA baseline          & none & NLL (LoRA) \\
-Video bottleneck base  & video only & NLL + $\beta$KL \\
-Video bottleneck DPO   & video only & VIB then DPO \\
-Video bottleneck SFT   & video only & VIB then SFT abstention \\
-AV bottleneck DPO      & video + audio & VIB then DPO \\
+Untrained              & identity & identity          & none \\
+LoRA baseline          & identity & identity          & NLL + LoRA \\
+Video bottleneck base  & identity & SinkAwareVIB      & NLL $+ \beta_v$KL \\
+Video bottleneck DPO   & identity & SinkAwareVIB      & VIB then DPO \\
+Video bottleneck SFT   & identity & SinkAwareVIB      & VIB then SFT \\
+AV bottleneck DPO      & NormTopKVIB & SinkAwareVIB   & VIB then DPO \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -151,16 +302,18 @@ AV bottleneck DPO      & video + audio & VIB then DPO \\
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Benchmarks}
 
-\textbf{AVQA} \cite{yang2022avqa}: 57,015 video clips from VGGSound \cite{vggsound2020},
-4-way multiple-choice (letters A--D), questions categorised as
-View / Sound / Both.  Because VGGSound is curated around sound events, these
-questions are predominantly answerable from audio alone.
+\textbf{AVQA}~\cite{yang2022avqa}: 57,015 video clips from
+VGGSound~\cite{vggsound2020}, 4-way multiple-choice (letters A--D).
+Questions are categorised as View / Sound / Both by the annotation.
+Because VGGSound is curated around sound events, these questions are
+predominantly answerable from audio alone, making it a weak substrate for
+the video-abstention experiment.
 
-\textbf{AVHBench} \cite{avhbench2024}: open-domain clips from VGGSound and
-AudioCaps, binary yes/no, three task types --- AV Matching,
-Audio-driven Video Hallucination, Video-driven Audio Hallucination.
-Both modalities are genuinely required, making it the more faithful substrate
-for the fail-safe abstention experiment.
+\textbf{AVHBench}~\cite{avhbench2024}: open-domain binary yes/no questions
+over VGGSound and AudioCaps clips, covering three task types --- AV Matching,
+Audio-driven Video Hallucination, and Video-driven Audio Hallucination.
+Both modalities are genuinely required for these judgment tasks, which is why
+this benchmark is the primary test of the fail-safe abstention mechanism.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Results on AVQA}
@@ -172,23 +325,23 @@ for the fail-safe abstention experiment.
 \toprule
 \textbf{Model} & \textbf{Acc (\%)} & \textbf{Mean NLL} & \textbf{Mean KL (video)} & $n$ \\
 \midrule
-Untrained baseline & \textbf{94.0} & 0.112 & 2904.9 & 300 \\
-Video bottleneck   & 93.3          & 0.105 & \textbf{1601.4} & 300 \\
-LoRA baseline      & 91.7          & 0.125 & 2904.9 & 300 \\
+Untrained baseline     & \textbf{94.0} & 0.112 & 2904.9 & 300 \\
+Video bottleneck base  & 93.3          & 0.105 & \textbf{1601.4} & 300 \\
+LoRA baseline          & 91.7          & 0.125 & 2904.9 & 300 \\
 \bottomrule
 \end{tabular}
 \end{center}
 
 The bottleneck halved the video KL (2905 $\to$ 1601) at negligible accuracy
-cost ($-0.7$ pp on $n{=}300$).  LoRA fine-tuning slightly degraded accuracy,
-consistent with the base model being near ceiling on this audio-dominated
-sample.
+cost ($\Delta{=}{-}0.7$ pp on $n{=}300$).  LoRA fine-tuning slightly degraded
+accuracy, consistent with the base model being near ceiling on this
+audio-dominated sample.
 
-\subsection{Abstention (Risk-Coverage)}
+\subsection{Risk-Coverage (Abstention)}
 
 \begin{center}
 \small
-\begin{tabular}{llrrl}
+\begin{tabular}{llrrr}
 \toprule
 \textbf{Model} & \textbf{Corruption} & \textbf{Coverage} & \textbf{Risk} & \textbf{Group} \\
 \midrule
@@ -210,24 +363,23 @@ Video bottleneck SFT & identity   & 100.0\% &  8.7\% & train \\
 \end{tabular}
 \end{center}
 
-Abstention did not emerge on AVQA: coverage stays near 100\% and risk stays
-$\approx 8$--$17$\% regardless of video corruption severity.  The cause is an
-ecological mismatch --- VGGSound questions are largely answerable from audio
-alone, so corrupting the video does not increase the model's error rate, and
-there is therefore no information-theoretic incentive to abstain.  The negative
-control confirms this: corrupting audio also leaves coverage and risk
-essentially unchanged.
+Abstention did not emerge on AVQA: coverage remains near 100\% and risk stays
+at $8$--$17$\% regardless of corruption.  The likely cause is an ecological
+mismatch: VGGSound questions are largely answerable from audio alone, so
+zeroing the video does not increase the error rate.  A model that is already
+correct without video has no incentive to abstain when video is corrupted.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Ongoing: AVHBench Evaluation}
 
-The same five checkpoints are now being evaluated on AVHBench \cite{avhbench2024}
-with the parallel 6-GPU eval script.  Because both modalities are genuinely
-required for AVHBench's judgment tasks, we expect: (i) risk to rise under
-\texttt{vid\_zero}/\texttt{vid\_mean}; (ii) the DPO models to begin abstaining
-(coverage drops) while the baselines maintain coverage with elevated risk;
-and (iii) audio corruption (\texttt{aud\_zero}/\texttt{aud\_mean}) to also
-affect coverage for audio-driven tasks, unlike the AVQA case.
+The same five checkpoints are being evaluated on AVHBench~\cite{avhbench2024}.
+Because both modalities are genuinely required for AVHBench's judgment tasks,
+we expect: (i) risk to rise under \texttt{vid\_zero}/\texttt{vid\_mean};
+(ii) the DPO models to abstain (coverage drops) while the baselines maintain
+coverage with elevated risk; (iii) audio corruption
+(\texttt{aud\_zero}/\texttt{aud\_mean}) to also affect coverage for
+audio-driven tasks, unlike the AVQA case where audio corruption was a
+true negative control.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \bibliographystyle{unsrtnat}
