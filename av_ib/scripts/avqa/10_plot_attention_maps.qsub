@@ -11,6 +11,10 @@
 set -o pipefail
 export PYTHONUNBUFFERED=1
 cd "$PBS_O_WORKDIR"
+# force live streaming regardless of PBS buffering policy
+LIVELOG="$PBS_O_WORKDIR/plot_attention_maps.live.log"
+exec > >(tee -a "$LIVELOG") 2>&1
+echo "Live log: $LIVELOG"
 source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
 conda activate av_ib
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
