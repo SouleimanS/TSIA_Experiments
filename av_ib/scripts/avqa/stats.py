@@ -62,23 +62,34 @@ def accuracy_stats(model_dir: Path, relmap: dict) -> dict | None:
     n_correct = 0
     by_rel = {}
     nlls, kl_vs = [], []
+    n_err = 0
     for r in recs:
         gold = str(r.get("gold", "")).strip().lower()
-        ok = int(parse_letter(r.get("raw_pred", r.get("raw", ""))) == gold)
+        # Trust the eval's own parsed prediction / correctness (produced by the
+        # dataset-aware parser). Recompute from raw text only if both absent.
+        if "correct" in r:
+            ok = int(r["correct"])
+        elif "pred" in r:
+            ok = int(str(r["pred"]).strip().lower() == gold)
+        else:
+            ok = int(parse_letter(r.get("raw_pred", r.get("raw", ""))) == gold)
+        if str(r.get("raw_pred", r.get("raw", ""))).startswith("<ERROR"):
+            n_err += 1
         n_correct += ok
         rel = relation_of(r, relmap)
         d = by_rel.setdefault(rel, [0, 0])
         d[0] += ok
         d[1] += 1
-        if r.get("nll") is not None:
+        if r.get("nll") is not None and r["nll"] == r["nll"]:
             nlls.append(r["nll"])
-        if r.get("kl_v") is not None:
+        if r.get("kl_v") is not None and r["kl_v"] == r["kl_v"]:
             kl_vs.append(r["kl_v"])
 
     n = len(recs)
     return {
         "n": n,
         "n_correct": n_correct,
+        "n_err": n_err,
         "acc_pct": round(100 * n_correct / max(n, 1), 1),
         "mean_nll": round(sum(nlls) / len(nlls), 4) if nlls else None,
         "mean_kl_v": round(sum(kl_vs) / len(kl_vs), 1) if kl_vs else None,
@@ -145,8 +156,9 @@ def main():
             continue
         rels = "  ".join(f"{k}:{v['acc_pct']}%(n={v['n']})"
                          for k, v in st["per_relation"].items())
+        err = f"  [!{st['n_err']} gen-errors]" if st.get("n_err") else ""
         print(f"  {model_dir.name:<22} {st['acc_pct']:>6.1f}% "
-              f"{st['mean_nll']!s:>8} {st['mean_kl_v']!s:>9}   {rels}")
+              f"{st['mean_nll']!s:>8} {st['mean_kl_v']!s:>9}   {rels}{err}")
 
     print("\n" + "=" * 64)
     print("RISK-COVERAGE  (abstention models)")
