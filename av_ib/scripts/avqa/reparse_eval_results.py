@@ -75,42 +75,33 @@ def reparse_dir(model_dir: Path) -> dict:
 
 
 def reparse_riskcoverage(rc_json: Path) -> dict:
+    """Use existing summary for coverage (correct); flag pred distribution."""
     data = json.loads(rc_json.read_text())
-    per_sample = data.get("per_sample", [])
-    if not per_sample:
-        return data
+    per_sample = data.get("per_sample", {})  # {corr: [records]}
+    summary    = data.get("summary", {})
 
-    by_corr = {}
-    for r in per_sample:
-        corr      = r.get("corruption", "?")
-        raw_pred  = r.get("raw_pred", r.get("pred", ""))
-        gold      = r.get("gold", "").strip().lower()
-        abstained = r.get("abstained", False)
+    # Tally what the model actually outputs when it answers
+    pred_dist = {}
+    for corr, records in per_sample.items():
+        for r in records:
+            if not r.get("abstained", False):
+                pred = str(r.get("pred", "")).strip().lower()
+                pred_dist[pred] = pred_dist.get(pred, 0) + 1
 
-        if corr not in by_corr:
-            by_corr[corr] = {"n": 0, "n_abstained": 0, "n_answered": 0, "n_correct": 0}
-        s = by_corr[corr]
-        s["n"] += 1
-        if abstained:
-            s["n_abstained"] += 1
-        else:
-            s["n_answered"] += 1
-            if parse_letter(raw_pred) == gold:
-                s["n_correct"] += 1
-
-    summary = {}
-    for corr, s in by_corr.items():
-        cov  = s["n_answered"] / max(s["n"], 1)
-        risk = 1.0 - s["n_correct"] / max(s["n_answered"], 1)
-        summary[corr] = {
-            "coverage_pct": round(cov * 100, 1),
-            "risk_pct": round(risk * 100, 1),
-            "n": s["n"],
-            "n_abstained": s["n_abstained"],
-            "n_answered": s["n_answered"],
-            "n_correct": s["n_correct"],
+    data["pred_distribution"] = pred_dist
+    # Coverage from existing summary is correct (abstain detection is parser-independent)
+    data["summary_reparsed"] = {
+        corr: {
+            "coverage_pct": round(v.get("coverage", 0) * 100, 1),
+            "risk_pct": round(v.get("risk", 0) * 100, 1),
+            "n": v.get("n", 0),
+            "n_abstained": v.get("n_abstained", 0),
+            "n_answered": v.get("n_answered", 0),
+            "n_correct": v.get("n_correct", 0),
+            "note": "risk unreliable — gold not stored; coverage is correct",
         }
-    data["summary_reparsed"] = summary
+        for corr, v in summary.items()
+    }
     return data
 
 
@@ -159,12 +150,15 @@ def main():
         print(f"\n  {rc_file.stem}")
         smry = data.get("summary_reparsed", {})
         if not smry:
-            print("    (no per_sample data)")
+            print("    (no summary data)")
             continue
-        print(f"  {'corruption':<20} {'cov':>6} {'risk':>6}  {'correct/answered':>16}")
+        print(f"  {'corruption':<20} {'cov':>6}  {'abstained':>10}")
         for corr, v in smry.items():
-            print(f"  {corr:<20} {v['coverage_pct']:5.1f}% {v['risk_pct']:5.1f}%"
-                  f"  {v['n_correct']:>4}/{v['n_answered']:<4}")
+            print(f"  {corr:<20} {v['coverage_pct']:5.1f}%  "
+                  f"{v['n_abstained']:>4}/{v['n']:<4}")
+        dist = data.get("pred_distribution", {})
+        if dist:
+            print(f"  pred dist (when answered): {dict(sorted(dist.items(), key=lambda x:-x[1]))}")
 
     print("\ndone.")
 
