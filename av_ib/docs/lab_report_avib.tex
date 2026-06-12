@@ -157,19 +157,23 @@ Sink tokens thus receive $100\times$ lower KL pressure, allowing them to pass
 through essentially unchanged while the non-sink tokens are genuinely
 compressed.
 
-\subsection{Audio Bottleneck (\texttt{NormTopKSinkVIB} or identity)}
+\subsection{Audio Path}
+
+In all conditions reported here except one, the audio path is a \textbf{pure
+identity}: the audio encoder output is passed directly to the thinker without
+any bottleneck or KL penalty.  Only the \emph{AV bottleneck DPO} condition
+applies a bottleneck to audio.
 
 The audio encoder has near-zero correlation ($\rho \approx -0.06$) with the
-video sink dimensions, so the dimension-based sink classifier is invalid for
-audio.  When an audio bottleneck is used (AV bottleneck variant), sink
-classification defaults to the top-40\% tokens by L2 norm:
+video sink dimensions [985, 1992], so the dimension-based sink classifier used
+for video is invalid for audio.  The audio bottleneck (\texttt{NormTopKSinkVIB})
+instead classifies the top-40\% tokens by L2 norm as sinks:
 \[
   \text{sink}(t) = \mathbf{1}\!\left[\|x_t\|_2 \geq \kappa_{0.6}(\{x\})\right]
 \]
-where $\kappa_{0.6}$ is the 60th-percentile norm threshold.  The
-KL split and residual paths are otherwise identical to the video bottleneck.
-In the \emph{video-only} variant the audio path is a pure identity (no
-bottleneck, no KL).
+where $\kappa_{0.6}$ is the 60th-percentile norm threshold.  The KL split
+($\alpha_s = 0.01$ for sink tokens) and residual bottleneck paths are
+otherwise identical to \texttt{SinkAwareVIB}.
 
 \subsection{Optional Cross-Modal Fusion (\texttt{MutualCrossAttention})}
 
@@ -285,16 +289,16 @@ and picking the minimum-NLL continuation.
 \subsection{Conditions}
 
 \begin{center}
-\begin{tabular}{llll}
+\begin{tabular}{lllp{4.2cm}}
 \toprule
-\textbf{Label} & \textbf{Audio} & \textbf{Video} & \textbf{Training} \\
+\textbf{Label} & \textbf{Video} & \textbf{Audio} & \textbf{Training} \\
 \midrule
-Untrained              & identity & identity          & none \\
-LoRA baseline          & identity & identity          & NLL + LoRA \\
-Video bottleneck base  & identity & SinkAwareVIB      & NLL $+ \beta_v$KL \\
-Video bottleneck DPO   & identity & SinkAwareVIB      & VIB then DPO \\
-Video bottleneck SFT   & identity & SinkAwareVIB      & VIB then SFT \\
-AV bottleneck DPO      & NormTopKVIB & SinkAwareVIB   & VIB then DPO \\
+Untrained              & identity     & identity    & none \\
+LoRA baseline          & identity     & identity    & NLL + LoRA \\
+Video bottleneck base  & SinkAwareVIB & identity    & NLL $+ \beta_v$KL \\
+Video bottleneck DPO   & SinkAwareVIB & identity    & VIB $\to$ DPO \\
+Video bottleneck SFT   & SinkAwareVIB & identity    & VIB $\to$ SFT \\
+AV bottleneck DPO      & SinkAwareVIB & NormTopKVIB & VIB $\to$ DPO \\
 \bottomrule
 \end{tabular}
 \end{center}
