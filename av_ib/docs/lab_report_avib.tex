@@ -1,0 +1,300 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{amsmath}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!8},
+  columns=fullflexible,
+  keepspaces=true,
+}
+
+\title{\textbf{Audio-Visual Information Bottleneck with Qwen3-Omni}\\
+       \large Lab Report --- Experiment Log}
+\author{Souleiman Sbais}
+\date{June 2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Overview}
+
+This document records the full experimental run of the audio-visual information
+bottleneck (\textbf{av\_ib}) project, including dataset preparation, training,
+evaluation pipeline debugging, and results on two benchmarks: AVQA
+(4-way multiple-choice, Yang et al.\ VGGSound-based) and AVHBench (binary
+yes/no audio-visual judgment tasks).
+
+The core idea is to wrap a frozen Qwen3-Omni-30B backbone inside a variational
+information bottleneck on the video channel.  The objective is:
+\[
+  \mathcal{L} = \underbrace{\mathcal{L}_\text{NLL}}_{\text{task accuracy}}
+              + \beta \cdot \underbrace{D_\text{KL}(q(z|v)\,\|\,\mathcal{N}(0,I))}_{\text{video compression}}
+\]
+where $z$ is the bottlenecked video representation drawn from a diagonal
+Gaussian $q(z|v) = \mathcal{N}(\mu(v),\,\sigma^2(v))$.  The KL term penalises
+information flowing through the video channel and, by design, forces the model
+to be uncertain about video when the channel is compressed.  This is exploited
+at inference time via a \emph{fail-safe abstention} mechanism: if the model
+would incur high risk by answering (because the video channel carries little
+signal), it abstains instead.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Dataset Preparation}
+
+\subsection{AVQA}
+The VGGSound-based AVQA dataset (57,015 clips, 4-way multiple choice, answer
+as 0--3 index mapped to letters A--D) was downloaded from Hugging Face in
+tarball shards.  During extraction, shard \texttt{vggsound\_08.tar.gz} was
+corrupt (\texttt{zlib.error: Error -3}).
+
+\textbf{Fix:} the download script was updated to catch all decompression
+exceptions, delete the cached file, force a fresh download, and skip with a
+warning if still failing.  Post-fix: \textbf{56,666 of 57,015 clips} present.
+
+A guard that counted clips via \texttt{ls *.mp4 | wc -l} also failed because
+56k files exceed the shell argument limit.  All qsub scripts were updated to
+use \texttt{find \$VIDEO\_ROOT -name "*.mp4" | wc -l} instead.
+
+\subsection{Abstention Label Mining}
+Binary abstention preference pairs (abstain on corrupted video / answer on
+clean identity) were mined from the AVQA training split.  The first run
+(seed 42, 3000 samples) froze at 625/3000 because that seed happened to
+sample mostly the $\approx27$k missing clips.  Parameters were changed to
+seed 99, 5000 samples.  Result: \textbf{232 clean contrast pairs}
+(id\_correct=4726 out of 5000 sampled).
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Training}
+
+Five conditions were trained:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Run} & \textbf{Method} & \textbf{Checkpoint} \\
+\midrule
+v6b\_base      & VIB fine-tune (NLL + $\beta$KL)  & v6b\_base\_final.pt \\
+lora\_baseline & LoRA fine-tune (NLL only)         & lora\_baseline\_final.pt \\
+video\_bottleneck\_dpo & DPO on video corruptions  & video\_bottleneck\_dpo\_final.pt \\
+video\_bottleneck\_sft & SFT abstention            & video\_bottleneck\_sft\_final.pt \\
+av\_bottleneck\_dpo    & DPO on AV corruptions     & av\_bottleneck\_dpo\_final.pt \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Training crashes (jobs 3/4/5)} were caused by two compounding bugs:
+
+\begin{enumerate}
+  \item \textbf{Missing \texttt{CUDA\_VISIBLE\_DEVICES=0}} in those qsub scripts.
+        Without it the model sharded across all 8 GPUs via \texttt{device\_map="auto"}.
+  \item \textbf{\texttt{inputs.to(self.model.device)}} in
+        \texttt{av\_ib/backbone/qwen\_omni.py} fails when the first parameter
+        lives on \texttt{cuda:0} but others live on \texttt{cuda:1--7}.
+\end{enumerate}
+
+Fix applied to \texttt{qwen\_omni.py}:
+\begin{lstlisting}[language=Python]
+first_device = next(self.model.parameters()).device
+inputs = {k: v.to(first_device) if isinstance(v, torch.Tensor) else v
+          for k, v in inputs.items()}
+inputs = {k: v.to(self.model.dtype) if isinstance(v, torch.Tensor)
+             and v.is_floating_point() else v
+          for k, v in inputs.items()}
+\end{lstlisting}
+
+Additionally, \texttt{TRANSFORMERS\_OFFLINE=1} and
+\texttt{HF\_DATASETS\_OFFLINE=1} were added to all qsub scripts because the
+compute nodes are air-gapped: without them, \texttt{transformers} tries to
+ping Hugging Face on model load and raises
+\texttt{Cannot send a request, as the client has been closed}.
+
+\textbf{Outcome:} v6b\_base (loss~0.376, NLL~0.019, KL\_v~850--2600) and
+lora\_baseline (loss~0.00086) completed successfully.  The three DPO/SFT jobs
+were re-submitted with the device fix and completed.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Evaluation Pipeline Fixes}
+
+\subsection{Answer Parser}
+
+The original parser (\texttt{parse\_answer}) only recognised MUSIC-AVQA
+vocabulary (yes/no/instrument names), producing 0\% accuracy on AVQA's A--D
+letters.  A dataset-aware parser was added to \texttt{eval\_v6\_heldout.py}:
+
+\begin{lstlisting}[language=Python]
+def _parse_for_dataset(raw: str, dataset: str) -> str:
+    if dataset == "avqa":
+        m = re.search(r"\b([A-Da-d])\b", raw)
+        return m.group(1).lower() if m else "??"
+    if dataset == "avhbench":
+        m = re.search(r"\b(yes|no)\b", raw.lower())
+        return m.group(1) if m else "??"
+    from av_ib.eval.answer_parser import parse_answer
+    return parse_answer(raw)
+\end{lstlisting}
+
+\subsection{Risk-Coverage Scoring}
+
+The \texttt{run\_one} function in \texttt{eval\_riskcoverage.py} originally
+teacher-forced only \{yes, no, "I can't tell"\}, so for AVQA the model was
+scored against three options none of which matched the gold letter --- risk was
+100\% by construction.  The function was rewritten to accept a
+\texttt{candidates} list:
+
+\begin{lstlisting}[language=Python]
+# score all real answer options + the abstain string
+nlls = {}
+with torch.no_grad():
+    for c in candidates:
+        nlls[c] = _score_response(model, inputs, c, prompt_len)
+    nlls[ABSTAIN_STR] = _score_response(model, inputs, ABSTAIN_STR, prompt_len)
+pred = min(nlls, key=nlls.get)
+abstained = (pred == ABSTAIN_STR)
+answered_correct = (not abstained) and (_norm(pred) == _norm(gold))
+\end{lstlisting}
+
+\texttt{candidates = ["A","B","C","D"]} for AVQA;
+\texttt{["yes","no"]} for AVHBench / MUSIC-AVQA.
+
+\subsection{Parallel Evaluation}
+
+The sequential eval script (all six conditions on GPU 0, $\sim$10h) was
+replaced by a parallel version pinning each condition to its own GPU (GPUs 0--5),
+reducing wall time to $\sim$4h:
+
+\begin{lstlisting}[language=Bash]
+run_on_gpu() {
+    local gpu="$1" name="$2"; shift 2
+    CUDA_VISIBLE_DEVICES="$gpu" "$@" > "$LOGDIR/${name}.log" 2>&1 &
+    PIDS+=("$!"); NAMES+=("$name")
+}
+# GPUs 0-2: accuracy evals (eval_v6_heldout)
+# GPUs 3-5: risk-coverage evals (eval_riskcoverage)
+\end{lstlisting}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Results on AVQA}
+
+\subsection{Accuracy}
+
+\begin{center}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Model} & \textbf{Acc (\%)} & \textbf{Mean NLL} & \textbf{Mean KL (video)} & \textbf{n} \\
+\midrule
+Untrained baseline & \textbf{94.0} & 0.112 & 2904.9 & 300 \\
+v6b\_base (VIB)    & 93.3          & 0.105 & \textbf{1601.4} & 300 \\
+LoRA baseline      & 91.7          & 0.125 & 2904.9 & 300 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Key finding:} the information bottleneck halved the video KL
+(2905 $\to$ 1601) \emph{at no accuracy cost} relative to the untrained model
+($-0.7$ pp, within sampling noise at $n{=}300$).  LoRA fine-tuning slightly
+degraded accuracy, suggesting the base model is near ceiling on this sample.
+
+Note: 298/300 sampled questions fall under the ``Both'' relation category, so
+the per-relation breakdown (View/Sound) is statistically meaningless at this
+sample size.
+
+\subsection{Risk-Coverage (Abstention)}
+
+\begin{center}
+\small
+\begin{tabular}{llrrl}
+\toprule
+\textbf{Model} & \textbf{Corruption} & \textbf{Coverage} & \textbf{Risk} & \textbf{Group} \\
+\midrule
+video\_bottleneck\_dpo & identity   & 100.0\% &  8.7\% & train \\
+                       & vid\_zero  &  99.3\% &  8.1\% & train \\
+                       & vid\_mean  &  98.0\% & 11.6\% & train \\
+                       & vid\_noise & 100.0\% &  8.7\% & held-out \\
+                       & vid\_scale & 100.0\% &  6.0\% & held-out \\
+\midrule
+av\_bottleneck\_dpo    & identity   & 100.0\% & 11.3\% & train \\
+                       & vid\_zero  &  93.3\% &  8.6\% & train \\
+                       & vid\_mean  &  86.7\% & 16.9\% & train \\
+                       & vid\_noise &  99.3\% & 10.1\% & held-out \\
+                       & vid\_scale & 100.0\% &  8.0\% & held-out \\
+\midrule
+video\_bottleneck\_sft & identity   & 100.0\% &  8.7\% & train \\
+                       & vid\_mean  &  88.0\% &  9.8\% & train \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Interpretation:} the fail-safe abstention behaviour did not emerge on
+AVQA.  Coverage stays near 100\% and risk stays $\approx 8$--$17$\% regardless
+of how severely the video is destroyed.  The root cause: zeroing the video does
+\emph{not} meaningfully increase the error rate, because AVQA questions are
+largely answerable from audio alone (they derive from VGGSound, which is
+audio-centric by design).  A model that is already correct when video is absent
+has no incentive to abstain when video is corrupted.
+
+This is \emph{not} a bug in the training or scoring.  It is an ecological
+mismatch between the corruption (video) and the dataset's information
+structure (audio-dominated).
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Next Steps: AVHBench Evaluation}
+
+AVHBench (open-domain VGGSound + AudioCaps clips, binary yes/no, three task
+types: AV Matching, Audio-driven Video Hallucination, Video-driven Audio
+Hallucination) is the right substrate for the abstention experiment.  Both
+modalities are genuinely required for the judgment tasks, so corrupting either
+should move risk upward, giving the abstention mechanism something to detect.
+
+The parallel evaluation script \texttt{scripts/avqa/9\_evaluate\_avhbench.qsub}
+reuses all five existing checkpoints (\texttt{runs/avqa/*\_final.pt}) and the
+fixed eval pipeline with \texttt{--dataset avhbench}.  Candidates are
+\texttt{["yes","no"]}.
+
+\medskip
+\noindent\textbf{Expected results if the hypothesis holds:}
+\begin{itemize}
+  \item Under \texttt{vid\_zero}/\texttt{vid\_mean}, risk should rise and
+        the DPO models should begin to abstain (coverage drops), while the
+        untrained and LoRA baselines maintain coverage with elevated risk.
+  \item Under \texttt{aud\_zero}/\texttt{aud\_mean}, audio-driven tasks
+        should also show elevated risk (unlike on AVQA where audio corruption
+        was a true negative control).
+\end{itemize}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Repository State}
+
+\begin{itemize}
+  \item Branch: \texttt{claude/intelligent-gauss-frySl}
+  \item All source fixes, training scripts, eval scripts, and stats reporter
+        are committed and pushed.
+  \item Run artifacts (\texttt{runs/}, \texttt{*.pt}) remain gitignored;
+        \texttt{results/} is tracked.
+  \item Key source files modified:
+    \begin{itemize}
+      \item \texttt{av\_ib/backbone/qwen\_omni.py} --- device fix
+      \item \texttt{av\_ib/eval/eval\_v6\_heldout.py} --- dataset-aware parser
+      \item \texttt{av\_ib/eval/eval\_riskcoverage.py} --- candidates list, store gold/nlls
+      \item \texttt{scripts/avqa/8\_evaluate\_all.qsub} --- parallel 6-GPU eval
+      \item \texttt{scripts/avqa/9\_evaluate\_avhbench.qsub} --- AVHBench eval (new)
+      \item \texttt{scripts/avqa/stats.py} --- clean stats reporter (new)
+    \end{itemize}
+\end{itemize}
+
+\end{document}
