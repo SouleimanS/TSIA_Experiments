@@ -6,8 +6,10 @@
 #PBS -l walltime=01:00:00
 #PBS -j oe
 #PBS -o plot_attention_maps.qsub.log
+#PBS -k oe
 
 set -uo pipefail
+export PYTHONUNBUFFERED=1
 cd "$PBS_O_WORKDIR"
 source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
 conda activate av_ib
