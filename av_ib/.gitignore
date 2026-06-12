@@ -1,4 +1,5 @@
-# === Large run artifacts (regeneratable; data preserved in results/logs_snapshot_*/) ===
+# === Large run artifacts (regeneratable; data preserved in # results/ is tracked — eval outputs are committed here
+logs_snapshot_*/) ===
 runs/
 *.pt
 *.bin
@@ -53,4 +54,5 @@ av_ib/train/qsub_train_musicavqa_bis_1k.sh
 av_ib/train/train_musicavqa_qwen3omni.py
 
 
-results/
+# results/ is tracked — eval outputs are committed here
+
