@@ -91,8 +91,25 @@ def _load_model(variant: str, ckpt_path: str | None):
 # Evaluation loop
 # ---------------------------------------------------------------------------
 
-def _run(model, ds, idxs: list[int], every: int = 10) -> list[dict]:
+_AVQA_VOCAB = {"a", "b", "c", "d"}
+_AVHBENCH_VOCAB = {"yes", "no"}
+
+def _parse_for_dataset(raw: str, dataset: str) -> str:
+    if dataset == "avqa":
+        # letter answer: take the first A/B/C/D in the output
+        import re
+        m = re.search(r"\b([A-Da-d])\b", raw)
+        return m.group(1).lower() if m else "??"
+    if dataset == "avhbench":
+        import re
+        m = re.search(r"\b(yes|no)\b", raw.lower())
+        return m.group(1) if m else "??"
     from av_ib.eval.answer_parser import parse_answer
+    return parse_answer(raw)
+
+
+def _run(model, ds, idxs: list[int], every: int = 10,
+         dataset: str = "musicavqa") -> list[dict]:
     results = []
     t0 = time.time()
     for s, i in enumerate(idxs):
@@ -111,7 +128,7 @@ def _run(model, ds, idxs: list[int], every: int = 10) -> list[dict]:
         except Exception as e:
             raw = f"<ERROR: {e}>"
 
-        parsed  = parse_answer(raw)
+        parsed  = _parse_for_dataset(raw, dataset)
         correct = int(parsed == gold)
 
         # Teacher-forced NLL + operating-point KL (noise off -> z=mu) on this
@@ -285,7 +302,7 @@ def main():
     )
 
     model   = _load_model(args.variant, args.ckpt_path)
-    results = _run(model, ds, idxs, every=args.every)
+    results = _run(model, ds, idxs, every=args.every, dataset=args.dataset)
     metrics = _compute(results)
 
     _print_summary(metrics, args.label)
