@@ -211,6 +211,7 @@ def main():
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     video_stem = Path(args.video).stem
+    proc = model.qwen.processor
 
     import matplotlib
     matplotlib.use("Agg")
