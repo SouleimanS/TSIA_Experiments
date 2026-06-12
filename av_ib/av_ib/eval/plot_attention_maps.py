@@ -1,23 +1,33 @@
 """Attention map visualisation for the Qwen3-Omni visual encoder.
 
-Usage — two-step:
+The visual encoder uses Qwen3OmniMoeVisionAttention with a fused qkv Linear —
+no nn.MultiheadAttention, so standard hooks return nothing. We hook the qkv
+Linear output directly and recompute attention weights as softmax(QK^T/sqrt(d)).
+There is no CLS token; we average attention over all query positions to get a
+per-patch saliency map.
 
-  Step 1: discover layer names (run once, prints module tree):
-      python -m av_ib.eval.plot_attention_maps --video path/to/clip.mp4 --discover
+Usage:
 
-  Step 2: plot attention maps for sampled frames:
-      python -m av_ib.eval.plot_attention_maps \
-          --video path/to/clip.mp4 \
-          --out-dir runs/attention_maps \
-          [--ckpt-path runs/avqa/v6b_base_final.pt] \
-          [--variant b_topk_nofusion] \
-          [--n-frames 6] \
-          [--layer-idx -1]        # which attention layer (-1 = last)
+  # discover n_heads (run once):
+  python -m av_ib.eval.plot_attention_maps --video clip.mp4 --discover
 
-The script hooks into the visual encoder's self-attention layers, extracts the
-attention weights from the [CLS] token (or mean-pooled query if no CLS), rolls
-them out across layers (Attention Rollout), resizes to the original frame
-resolution, and saves one heatmap image per sampled frame.
+  # plot 6 frames with attention rollout across all 27 layers:
+  python -m av_ib.eval.plot_attention_maps \\
+      --video clip.mp4 \\
+      --out-dir runs/attention_maps \\
+      --n-frames 6 --rollout
+
+  # or single last layer:
+  python -m av_ib.eval.plot_attention_maps \\
+      --video clip.mp4 \\
+      --out-dir runs/attention_maps \\
+      --n-frames 6 --layer-idx -1
+
+  # with a trained checkpoint:
+  python -m av_ib.eval.plot_attention_maps \\
+      --video clip.mp4 --out-dir runs/attention_maps \\
+      --ckpt-path runs/avqa/v6b_base_final.pt \\
+      --n-frames 6 --rollout
 """
 from __future__ import annotations
 
@@ -25,20 +35,19 @@ import argparse
 import math
 import os
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
-# ── helpers ──────────────────────────────────────────────────────────────────
-
+# ─────────────────────────────────────────────────────────────────────────────
 def _extract_frames(video_path: str, n_frames: int) -> list[np.ndarray]:
-    """Return n_frames uniformly sampled RGB frames as uint8 arrays (H,W,3)."""
+    """Uniformly sampled RGB frames as uint8 (H, W, 3)."""
     import cv2
     cap = cv2.VideoCapture(video_path)
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    total = max(int(cap.get(cv2.CAP_PROP_FRAME_COUNT)), 1)
     idxs = np.linspace(0, total - 1, n_frames, dtype=int)
     frames = []
     for idx in idxs:
@@ -50,73 +59,100 @@ def _extract_frames(video_path: str, n_frames: int) -> list[np.ndarray]:
     return frames
 
 
-def _find_attn_layers(module: nn.Module, prefix: str = "") -> list[tuple[str, nn.Module]]:
-    """Walk module tree and return (name, layer) for anything that looks like
-    a self-attention layer (has q_proj / qkv / in_proj)."""
-    hits = []
-    for name, child in module.named_modules():
-        cname = type(child).__name__.lower()
-        attrs = set(n for n, _ in child.named_children())
-        if any(k in attrs for k in ("q_proj", "qkv", "in_proj", "query")):
-            hits.append((name, child))
-    return hits
+def _infer_n_heads(attn_module: nn.Module) -> int:
+    """Infer number of attention heads from the qkv weight shape."""
+    qkv: nn.Linear = attn_module.qkv
+    # qkv.weight: (3 * d_model, d_model)
+    three_d = qkv.weight.shape[0]
+    d_model  = qkv.weight.shape[1]
+    # Qwen ViT typically uses head_dim=128 or 64
+    for head_dim in (128, 64, 32):
+        n_heads = d_model // head_dim
+        if n_heads * head_dim == d_model and three_d == 3 * d_model:
+            return n_heads
+    # fallback: assume head_dim=64
+    return d_model // 64
 
 
-def _rollout(attn_weights: list[np.ndarray], add_residual: bool = True) -> np.ndarray:
+def _attn_weights_from_qkv(qkv_out: torch.Tensor, n_heads: int) -> np.ndarray:
+    """Compute attention weight matrix from fused QKV output.
+
+    qkv_out: (N, 3*d_model)  — N = number of patch tokens, no batch dim after
+             the encoder flattens everything, OR (B, N, 3*d_model).
+    Returns: (n_heads, N, N) float32 numpy array.
+    """
+    if qkv_out.dim() == 2:
+        qkv_out = qkv_out.unsqueeze(0)   # (1, N, 3*d)
+    B, N, three_d = qkv_out.shape
+    d_model = three_d // 3
+    head_dim = d_model // n_heads
+
+    q, k, _ = qkv_out.chunk(3, dim=-1)   # each (B, N, d_model)
+    # reshape to (B, n_heads, N, head_dim)
+    q = q.view(B, N, n_heads, head_dim).permute(0, 2, 1, 3)
+    k = k.view(B, N, n_heads, head_dim).permute(0, 2, 1, 3)
+
+    scale = head_dim ** -0.5
+    attn = (q @ k.transpose(-2, -1)) * scale    # (B, n_heads, N, N)
+    attn = F.softmax(attn, dim=-1)
+
+    # take first batch element, detach
+    return attn[0].detach().cpu().float().numpy()   # (n_heads, N, N)
+
+
+def _rollout(layers: list[np.ndarray], add_residual: bool = True) -> np.ndarray:
     """Attention rollout (Abnar & Zuidema 2020).
 
-    attn_weights: list of (n_heads, N, N) arrays, one per layer.
-    Returns: (N,) relevance scores for the CLS token (index 0).
+    layers: list of (n_heads, N, N) — one per transformer block.
+    Returns: (N, N) joint attention matrix. Use mean over rows for saliency.
     """
-    result = np.eye(attn_weights[0].shape[-1])
-    for a in attn_weights:
-        a_mean = a.mean(axis=0)  # (N, N) — average over heads
+    R = np.eye(layers[0].shape[-1])
+    for a in layers:
+        a_mean = a.mean(axis=0)               # (N, N)
         if add_residual:
             a_mean = a_mean + np.eye(a_mean.shape[0])
-            a_mean = a_mean / a_mean.sum(axis=-1, keepdims=True)
-        result = a_mean @ result
-    # Row 0 is the CLS token's attention over all patch tokens
-    return result[0]  # (N,)
+            a_mean /= a_mean.sum(axis=-1, keepdims=True) + 1e-8
+        R = a_mean @ R
+    return R   # (N, N)
 
 
-def _to_heatmap(scores: np.ndarray, h_patches: int, w_patches: int,
+def _saliency(attn_matrix: np.ndarray) -> np.ndarray:
+    """Mean attention over all query positions -> (N,) patch saliency."""
+    return attn_matrix.mean(axis=0)
+
+
+def _to_heatmap(scores: np.ndarray, h_p: int, w_p: int,
                 frame: np.ndarray, alpha: float = 0.55) -> np.ndarray:
-    """Overlay attention heatmap on frame. Returns uint8 RGB image."""
+    """Resize patch scores to frame size and blend as a heatmap."""
     import cv2
-    n = h_patches * w_patches
-    patch_scores = scores[1:n + 1] if len(scores) > n else scores[:n]
-    grid = patch_scores.reshape(h_patches, w_patches)
+    grid = scores[:h_p * w_p].reshape(h_p, w_p)
     grid = (grid - grid.min()) / (grid.max() - grid.min() + 1e-8)
-
     H, W = frame.shape[:2]
-    heat = cv2.resize(grid.astype(np.float32), (W, H), interpolation=cv2.INTER_LINEAR)
-    heat_uint8 = (heat * 255).astype(np.uint8)
-    colormap = cv2.applyColorMap(heat_uint8, cv2.COLORMAP_JET)
-    colormap_rgb = cv2.cvtColor(colormap, cv2.COLOR_BGR2RGB)
-    blended = (alpha * colormap_rgb + (1 - alpha) * frame).astype(np.uint8)
-    return blended
+    heat = cv2.resize(grid.astype(np.float32), (W, H),
+                      interpolation=cv2.INTER_LINEAR)
+    colormap = cv2.applyColorMap((heat * 255).astype(np.uint8), cv2.COLORMAP_JET)
+    colormap = cv2.cvtColor(colormap, cv2.COLOR_BGR2RGB)
+    return (alpha * colormap + (1 - alpha) * frame).astype(np.uint8)
 
 
-# ── main ─────────────────────────────────────────────────────────────────────
-
+# ─────────────────────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--video",        required=True)
-    ap.add_argument("--out-dir",      default="runs/attention_maps")
-    ap.add_argument("--ckpt-path",    default=None)
-    ap.add_argument("--variant",      default="b_topk_nofusion")
-    ap.add_argument("--n-frames",     type=int, default=6)
-    ap.add_argument("--layer-idx",    type=int, default=-1,
-                    help="Which attention layer to use (-1=last, or 0..N). "
-                         "Pass 'all' via --rollout to aggregate all layers.")
-    ap.add_argument("--rollout",      action="store_true",
-                    help="Use attention rollout (aggregate all layers). "
-                         "Overrides --layer-idx.")
-    ap.add_argument("--discover",     action="store_true",
-                    help="Print visual encoder module tree and exit.")
+    ap.add_argument("--video",      required=True)
+    ap.add_argument("--out-dir",    default="runs/attention_maps")
+    ap.add_argument("--ckpt-path",  default=None)
+    ap.add_argument("--variant",    default="b_topk_nofusion")
+    ap.add_argument("--n-frames",   type=int, default=6)
+    ap.add_argument("--layer-idx",  type=int, default=-1,
+                    help="Single layer index to visualise (-1 = last). "
+                         "Ignored when --rollout is set.")
+    ap.add_argument("--rollout",    action="store_true",
+                    help="Aggregate all layers via attention rollout.")
+    ap.add_argument("--discover",   action="store_true",
+                    help="Print module tree and exit.")
     args = ap.parse_args()
 
-    # ── build model ──
+    # ── build model ──────────────────────────────────────────────────────────
     print("Loading model...", flush=True)
     from av_ib.model.av_model_v6 import AVModelV6
     model = AVModelV6(use_lora=bool(args.ckpt_path), variant=args.variant).eval()
@@ -133,46 +169,40 @@ def main():
 
     vis_enc = model.qwen.visual_encoder
 
-    # ── discover mode ──
     if args.discover:
         print("\n=== Visual encoder module tree ===")
         for name, mod in vis_enc.named_modules():
             if name:
                 indent = "  " * name.count(".")
                 print(f"{indent}{name}: {type(mod).__name__}")
-        print("\n=== Attention-like layers found ===")
-        for name, _ in _find_attn_layers(vis_enc):
-            print(f"  {name}")
+        # also report n_heads
+        attn0 = vis_enc.blocks[0].attn
+        n_heads = _infer_n_heads(attn0)
+        d_model = attn0.qkv.weight.shape[1]
+        print(f"\n  d_model={d_model}, n_heads={n_heads}, "
+              f"head_dim={d_model // n_heads}")
+        print(f"  {len(vis_enc.blocks)} transformer blocks")
         return
 
-    # ── register hooks ──
-    attn_layers = _find_attn_layers(vis_enc)
-    if not attn_layers:
-        raise RuntimeError(
-            "No attention layers found. Run with --discover to inspect the module tree.")
+    # ── hook qkv linears in every block ──────────────────────────────────────
+    attn_blocks = vis_enc.blocks   # ModuleList
+    n_heads = _infer_n_heads(attn_blocks[0].attn)
+    print(f"n_heads={n_heads}, blocks={len(attn_blocks)}", flush=True)
 
-    print(f"Found {len(attn_layers)} attention layers in visual encoder.", flush=True)
+    # per-block storage: list of lists
+    qkv_storage: list[list[torch.Tensor]] = [[] for _ in attn_blocks]
 
-    _captured: list[Optional[torch.Tensor]] = []  # one entry per forward call
-
-    def _make_hook(storage: list):
+    def _make_qkv_hook(store: list):
         def hook(module, input, output):
-            # output may be (attn_output, attn_weights) or just attn_output
-            if isinstance(output, tuple) and len(output) >= 2:
-                w = output[1]  # (B, heads, N, N)
-                if w is not None:
-                    storage.append(w.detach().cpu().float().numpy())
+            store.append(output.detach())
         return hook
 
-    all_layer_storage: list[list] = [[] for _ in attn_layers]
     hooks = []
-    for i, (name, layer) in enumerate(attn_layers):
-        # Need attention weights: patch nn.MultiheadAttention to return them
-        if hasattr(layer, "forward"):
-            h = layer.register_forward_hook(_make_hook(all_layer_storage[i]))
-            hooks.append(h)
+    for i, blk in enumerate(attn_blocks):
+        h = blk.attn.qkv.register_forward_hook(_make_qkv_hook(qkv_storage[i]))
+        hooks.append(h)
 
-    # ── extract frames ──
+    # ── extract frames ────────────────────────────────────────────────────────
     frames = _extract_frames(args.video, args.n_frames)
     if not frames:
         raise RuntimeError(f"Could not extract frames from {args.video}")
@@ -180,32 +210,27 @@ def main():
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-
     video_stem = Path(args.video).stem
 
-    # ── run one frame at a time through the visual encoder ──
-    # We use the processor to prepare the video input, then run only the
-    # visual encoder with a forward hook, bypassing the full model.
-
-    from av_ib.model.av_model_v6 import AVModelV6  # already imported
-    tok = model.qwen.tokenizer
     proc = model.qwen.processor
 
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
     for fi, frame_rgb in enumerate(frames):
-        # Clear storage
-        for s in all_layer_storage:
+        # clear storage
+        for s in qkv_storage:
             s.clear()
 
-        # Prepare a minimal conversation with just this frame as an image
+        # ── prepare single-image input ────────────────────────────────────
         import tempfile, cv2
         import PIL.Image as PILImage
         pil_img = PILImage.fromarray(frame_rgb)
-
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tf:
             tmp_path = tf.name
         pil_img.save(tmp_path)
 
-        # Build a minimal conversation that feeds just the image
         conversation = [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": [
@@ -218,66 +243,64 @@ def main():
                                             add_generation_prompt=True,
                                             tokenize=False)
             from qwen_omni_utils import process_mm_info
-            _, images_in, _ = process_mm_info(conversation, use_audio_in_video=False)
-            inputs = proc(text=text, images=images_in, return_tensors="pt", padding=True)
-
-            first_device = next(vis_enc.parameters()).device
-            inputs = {k: v.to(first_device) if isinstance(v, torch.Tensor) else v
+            _, images_in, _ = process_mm_info(conversation,
+                                              use_audio_in_video=False)
+            inputs = proc(text=text, images=images_in,
+                          return_tensors="pt", padding=True)
+            first_dev = next(vis_enc.parameters()).device
+            inputs = {k: v.to(first_dev) if isinstance(v, torch.Tensor) else v
                       for k, v in inputs.items()}
-
             with torch.no_grad():
-                # Run full model forward just to trigger visual encoder hooks
                 model.qwen.model.thinker(**inputs, use_audio_in_video=False)
-
         except Exception as e:
-            print(f"  Frame {fi}: error during forward — {e}", flush=True)
+            print(f"  Frame {fi}: forward error — {e}", flush=True)
             os.unlink(tmp_path)
             continue
-
         os.unlink(tmp_path)
 
-        # ── collect captured attention weights ──
-        collected = [s[0] for s in all_layer_storage if s]
-        if not collected:
-            print(f"  Frame {fi}: no attention weights captured. "
-                  f"The attention layers may not return weights by default. "
-                  f"Run --discover to inspect layer types.", flush=True)
+        # ── compute per-layer attention weights ───────────────────────────
+        layer_attns = []
+        for i, store in enumerate(qkv_storage):
+            if not store:
+                continue
+            qkv_out = store[0]   # (N, 3*d) or (B, N, 3*d)
+            w = _attn_weights_from_qkv(qkv_out, n_heads)  # (n_heads, N, N)
+            layer_attns.append(w)
+
+        if not layer_attns:
+            print(f"  Frame {fi}: no qkv output captured.", flush=True)
             continue
 
-        print(f"  Frame {fi}: captured {len(collected)} layers, "
-              f"shape {collected[0].shape}", flush=True)
-
-        # ── compute patch grid dimensions ──
-        # shape: (B, heads, N, N)  where N = 1 (CLS) + h_p * w_p
-        N = collected[0].shape[-1]
-        n_patches = N - 1  # subtract CLS token
-        h_patches = w_patches = int(math.isqrt(n_patches))
-        if h_patches * w_patches != n_patches:
-            # Non-square — try to find factors
-            for h in range(int(n_patches**0.5), 0, -1):
-                if n_patches % h == 0:
-                    h_patches, w_patches = h, n_patches // h
+        N = layer_attns[0].shape[-1]
+        h_p = w_p = int(math.isqrt(N))
+        if h_p * w_p != N:
+            for h in range(int(N ** 0.5), 0, -1):
+                if N % h == 0:
+                    h_p, w_p = h, N // h
                     break
 
-        # ── attention rollout or single layer ──
+        print(f"  Frame {fi}: {len(layer_attns)} layers, "
+              f"N={N} patches ({h_p}×{w_p})", flush=True)
+
+        # ── saliency map ──────────────────────────────────────────────────
         if args.rollout:
-            scores = _rollout([a[0] for a in collected])  # (N,)
+            R = _rollout(layer_attns)            # (N, N)
+            scores = _saliency(R)                # (N,)
+            tag = "rollout"
         else:
-            layer = collected[args.layer_idx]   # (B, heads, N, N)
-            scores = layer[0].mean(axis=0)[0]   # mean over heads, CLS row -> (N,)
+            w = layer_attns[args.layer_idx]      # (n_heads, N, N)
+            scores = _saliency(w.mean(axis=0))   # (N,)
+            tag = f"layer{args.layer_idx % len(layer_attns)}"
 
-        # ── overlay and save ──
-        vis = _to_heatmap(scores, h_patches, w_patches, frame_rgb)
+        vis = _to_heatmap(scores, h_p, w_p, frame_rgb)
 
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        fig, axes = plt.subplots(1, 2, figsize=(8, 4))
-        axes[0].imshow(frame_rgb);   axes[0].set_title("Original"); axes[0].axis("off")
-        axes[1].imshow(vis);         axes[1].set_title("Attention"); axes[1].axis("off")
-        tag = "rollout" if args.rollout else f"layer{args.layer_idx}"
+        # ── save side-by-side ─────────────────────────────────────────────
         ckpt_tag = Path(args.ckpt_path).stem if args.ckpt_path else "untrained"
+        fig, axes = plt.subplots(1, 2, figsize=(8, 4))
+        axes[0].imshow(frame_rgb);  axes[0].set_title("Original"); axes[0].axis("off")
+        axes[1].imshow(vis);        axes[1].set_title(f"Attention ({tag})"); axes[1].axis("off")
         fname = out_dir / f"{video_stem}_frame{fi:02d}_{ckpt_tag}_{tag}.png"
+        plt.suptitle(f"{video_stem}  frame {fi}  [{ckpt_tag}]", fontsize=9)
         plt.tight_layout()
         plt.savefig(fname, dpi=150)
         plt.close()
@@ -285,7 +308,6 @@ def main():
 
     for h in hooks:
         h.remove()
-
     print("Done.", flush=True)
 
 
