@@ -225,11 +225,16 @@ def main():
     # accumulate (original, heatmap) pairs across all frames
     collected_pairs: list[tuple[np.ndarray, np.ndarray]] = []
 
+    vis_dev = next(vis_enc.parameters()).device
+
     for fi, frame_rgb in enumerate(frames):
         for s in qkv_storage:
             s.clear()
 
-        # ── prepare single-image input ────────────────────────────────────
+        # ── process image → pixel_values via processor, then run vis_enc only ──
+        # We don't need the full 30B LLM — only the visual encoder produces
+        # the attention maps we want. This also avoids the multi-GPU device
+        # mismatch that occurs when calling the full thinker forward.
         pil_img = PILImage.fromarray(frame_rgb)
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tf:
             tmp_path = tf.name
@@ -251,11 +256,27 @@ def main():
                                               use_audio_in_video=False)
             inputs = proc(text=text, images=images_in,
                           return_tensors="pt", padding=True)
-            first_dev = next(vis_enc.parameters()).device
-            inputs = {k: v.to(first_dev) if isinstance(v, torch.Tensor) else v
-                      for k, v in inputs.items()}
+
+            pixel_values   = inputs.get("pixel_values")
+            image_grid_thw = inputs.get("image_grid_thw")
+
+            if pixel_values is None:
+                print(f"  Frame {fi}: no pixel_values in processor output — "
+                      f"keys: {list(inputs.keys())}", flush=True)
+                os.unlink(tmp_path)
+                continue
+
+            pixel_values = pixel_values.to(vis_dev)
+            if image_grid_thw is not None:
+                image_grid_thw = image_grid_thw.to(vis_dev)
+
             with torch.no_grad():
-                model.qwen.model.thinker(**inputs, use_audio_in_video=False)
+                # call the visual encoder directly — no LLM needed
+                if image_grid_thw is not None:
+                    vis_enc(pixel_values, image_grid_thw)
+                else:
+                    vis_enc(pixel_values)
+
         except Exception as e:
             print(f"  Frame {fi}: forward error — {e}", flush=True)
             os.unlink(tmp_path)
