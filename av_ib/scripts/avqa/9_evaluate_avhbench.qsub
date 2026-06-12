@@ -1,0 +1,97 @@
+#!/bin/bash
+#PBS -N avhbench_evaluate_all
+#PBS -P gae50891
+#PBS -q rt_HF
+#PBS -l select=1
+#PBS -l walltime=04:00:00
+#PBS -j oe
+#PBS -o avhbench_evaluate_all.qsub.log
+
+# Evaluate every trained checkpoint on AVHBench (binary yes/no judgment tasks)
+# in PARALLEL: each model gets its own GPU. Accuracy (base models) +
+# risk-coverage under corruption (abstention models). AVHBench clips are
+# open-domain (VGGSound + AudioCaps), so unlike AVQA both modalities genuinely
+# matter — corrupting video OR audio should actually move risk, which makes
+# this the real test of the fail-safe abstention behaviour.
+
+set -uo pipefail
+cd "$PBS_O_WORKDIR"
+mkdir -p "$PBS_O_WORKDIR/runs/avhbench/eval"
+source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
+conda activate av_ib
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+echo "=== Node: $(hostname)  Date: $(date) ==="
+nvidia-smi -L
+
+AVH_ROOT="$HOME/SOULEIMAN_repo/datasets/AVHBench/data/AVHBench_v0"
+ANN="$AVH_ROOT/json/qa.json"
+VIDEO_ROOT="$AVH_ROOT/video"
+[ -f "$ANN" ]      || { echo "ERROR: $ANN missing"      >&2; exit 1; }
+[ -d "$VIDEO_ROOT" ] || { echo "ERROR: $VIDEO_ROOT missing" >&2; exit 1; }
+N_CLIPS=$(find "$VIDEO_ROOT" -name "*.mp4" | wc -l)
+[ "$N_CLIPS" -ge 100 ] || { echo "ERROR: only $N_CLIPS clips in $VIDEO_ROOT" >&2; exit 1; }
+echo "AVHBench: $N_CLIPS clips, annotations $ANN"
+
+LOGDIR="runs/avhbench/eval/logs"
+mkdir -p "$LOGDIR"
+
+declare -a PIDS=()
+declare -a NAMES=()
+
+run_on_gpu() {
+    # $1 = gpu index, $2 = job name, rest = command
+    local gpu="$1" name="$2"; shift 2
+    echo ">>> launching $name on GPU $gpu"
+    CUDA_VISIBLE_DEVICES="$gpu" "$@" > "$LOGDIR/${name}.log" 2>&1 &
+    PIDS+=("$!")
+    NAMES+=("$name")
+}
+
+# ── accuracy: base checkpoints + untrained reference (GPUs 0-2) ──
+[ -f runs/avqa/v6b_base_final.pt ]      && run_on_gpu 0 avhbench_v6b_base \
+    python -u -m av_ib.eval.eval_v6_heldout --ann-path "$ANN" --video-root "$VIDEO_ROOT" \
+    --dataset avhbench --variant b_topk_nofusion --label avhbench_v6b_base \
+    --ckpt-path runs/avqa/v6b_base_final.pt --out-dir runs/avhbench/eval \
+    --num-samples 300 --seed 99 --train-max-samples 0
+
+[ -f runs/avqa/lora_baseline_final.pt ] && run_on_gpu 1 avhbench_lora_baseline \
+    python -u -m av_ib.eval.eval_v6_heldout --ann-path "$ANN" --video-root "$VIDEO_ROOT" \
+    --dataset avhbench --variant b_topk_nofusion --label avhbench_lora_baseline \
+    --ckpt-path runs/avqa/lora_baseline_final.pt --out-dir runs/avhbench/eval \
+    --num-samples 300 --seed 99 --train-max-samples 0
+
+run_on_gpu 2 avhbench_untrained \
+    python -u -m av_ib.eval.eval_v6_heldout --ann-path "$ANN" --video-root "$VIDEO_ROOT" \
+    --dataset avhbench --variant b_topk_nofusion --label avhbench_untrained \
+    --out-dir runs/avhbench/eval --num-samples 300 --seed 99 --train-max-samples 0
+
+# ── risk-coverage: abstention checkpoints (GPUs 3-5) ──
+riskcov() {  # $1 = gpu, $2 = tag, $3 = variant
+    [ -f "runs/avqa/$2_final.pt" ] || { echo "SKIP $2 (no checkpoint)"; return; }
+    run_on_gpu "$1" "$2" \
+        python -u -m av_ib.eval.eval_riskcoverage \
+        --ann-path "$ANN" --video-root "$VIDEO_ROOT" --dataset avhbench \
+        --variant "$3" --ckpt-path "runs/avqa/$2_final.pt" \
+        --num-samples 150 --seed 99 --every 15 \
+        --out-json "runs/avhbench/eval/$2_riskcoverage.json"
+}
+riskcov 3 video_bottleneck_dpo b_video_only
+riskcov 4 video_bottleneck_sft b_video_only
+riskcov 5 av_bottleneck_dpo    b_topk_nofusion
+
+# ── wait for all, report per-job exit status ──
+echo "=== waiting on ${#PIDS[@]} parallel evals ==="
+FAIL=0
+for i in "${!PIDS[@]}"; do
+    if wait "${PIDS[$i]}"; then
+        echo "  OK   ${NAMES[$i]}"
+    else
+        echo "  FAIL ${NAMES[$i]}  (see $LOGDIR/${NAMES[$i]}.log)"
+        FAIL=1
+    fi
+done
+
+echo "=== Done $(date)  (FAIL=$FAIL) ==="
+exit $FAIL

@@ -37,9 +37,17 @@ def parse_letter(raw) -> str:
 # annotation join: (video_name, question_text) -> question_relation
 # ---------------------------------------------------------------------------
 def load_relation_map(ann_path: Path) -> dict:
+    """AVQA only: (video_name, question_text) -> question_relation.
+
+    AVHBench's qa.json has no such fields; callers pass --ann only for AVQA, so
+    an empty map is returned for any annotation file lacking these keys and the
+    per-relation breakdown simply collapses to a single overall bucket.
+    """
     recs = json.loads(ann_path.read_text())
     m = {}
     for r in recs:
+        if "video_name" not in r or "question_text" not in r:
+            return {}
         key = (r["video_name"], r["question_text"].strip())
         m[key] = r.get("question_relation", "?")
     return m
@@ -142,11 +150,13 @@ def riskcov_stats(rc_path: Path, relmap: dict) -> dict:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--eval-dir", default="runs/avqa/eval")
-    ap.add_argument("--ann", required=True, help="val_qa.json for the relation join")
+    ap.add_argument("--ann", default=None,
+                    help="AVQA val_qa.json for the View/Sound/Both relation join "
+                         "(optional; omit for AVHBench or any non-AVQA eval)")
     args = ap.parse_args()
 
     eval_dir = Path(args.eval_dir)
-    relmap = load_relation_map(Path(args.ann).expanduser())
+    relmap = load_relation_map(Path(args.ann).expanduser()) if args.ann else {}
 
     print("=" * 64)
     print("ACCURACY  (4-way multiple choice, letter A-D)")
