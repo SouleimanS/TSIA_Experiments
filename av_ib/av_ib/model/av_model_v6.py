@@ -270,7 +270,6 @@ class AVModelV6(nn.Module):
         variant: str = "b_std_fusion",
         adaptive_beta: bool = False,
         adaptive_beta_base: float = 0.1,
-        attn_implementation: str | None = None,
     ):
         super().__init__()
 
@@ -306,7 +305,6 @@ class AVModelV6(nn.Module):
             use_lora=use_lora,
             lora_r=lora_r,
             lora_alpha=lora_alpha,
-            attn_implementation=attn_implementation,
         )
 
         # ── VIDEO VIB (always SinkAwareVIB in v6) ───────────────────

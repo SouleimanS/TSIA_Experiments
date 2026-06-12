@@ -73,7 +73,6 @@ class QwenOmniWrapper(nn.Module):
         lora_alpha: int = 16,
         lora_dropout: float = 0.0,
         precision: str = "bf16",
-        attn_implementation: Optional[str] = None,
     ):
         super().__init__()
         self.use_lora = use_lora
@@ -81,15 +80,11 @@ class QwenOmniWrapper(nn.Module):
         from transformers import Qwen3OmniMoeForConditionalGeneration, Qwen3OmniMoeProcessor
         dtype = torch.bfloat16 if precision == "bf16" else torch.float16
 
-        load_kwargs = dict(
+        self.model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
+            model_path,
             torch_dtype=dtype,
             device_map="auto",
             trust_remote_code=True,
-        )
-        if attn_implementation is not None:
-            load_kwargs["attn_implementation"] = attn_implementation
-        self.model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
-            model_path, **load_kwargs,
         )
         self.processor = Qwen3OmniMoeProcessor.from_pretrained(model_path, trust_remote_code=True)
         self.tokenizer = self.processor.tokenizer
