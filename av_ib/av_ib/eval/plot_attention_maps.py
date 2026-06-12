@@ -212,20 +212,23 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     video_stem = Path(args.video).stem
 
-    proc = model.qwen.processor
-
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    import tempfile, cv2
+    import PIL.Image as PILImage
+
+    ckpt_tag = Path(args.ckpt_path).stem if args.ckpt_path else "untrained"
+    tag = "rollout" if args.rollout else f"layer{args.layer_idx}"
+
+    # accumulate (original, heatmap) pairs across all frames
+    collected_pairs: list[tuple[np.ndarray, np.ndarray]] = []
 
     for fi, frame_rgb in enumerate(frames):
-        # clear storage
         for s in qkv_storage:
             s.clear()
 
         # ── prepare single-image input ────────────────────────────────────
-        import tempfile, cv2
-        import PIL.Image as PILImage
         pil_img = PILImage.fromarray(frame_rgb)
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tf:
             tmp_path = tf.name
@@ -260,11 +263,10 @@ def main():
 
         # ── compute per-layer attention weights ───────────────────────────
         layer_attns = []
-        for i, store in enumerate(qkv_storage):
+        for store in qkv_storage:
             if not store:
                 continue
-            qkv_out = store[0]   # (N, 3*d) or (B, N, 3*d)
-            w = _attn_weights_from_qkv(qkv_out, n_heads)  # (n_heads, N, N)
+            w = _attn_weights_from_qkv(store[0], n_heads)
             layer_attns.append(w)
 
         if not layer_attns:
@@ -282,32 +284,50 @@ def main():
         print(f"  Frame {fi}: {len(layer_attns)} layers, "
               f"N={N} patches ({h_p}×{w_p})", flush=True)
 
-        # ── saliency map ──────────────────────────────────────────────────
         if args.rollout:
-            R = _rollout(layer_attns)            # (N, N)
-            scores = _saliency(R)                # (N,)
-            tag = "rollout"
+            scores = _saliency(_rollout(layer_attns))
         else:
-            w = layer_attns[args.layer_idx]      # (n_heads, N, N)
-            scores = _saliency(w.mean(axis=0))   # (N,)
-            tag = f"layer{args.layer_idx % len(layer_attns)}"
+            scores = _saliency(layer_attns[args.layer_idx].mean(axis=0))
 
         vis = _to_heatmap(scores, h_p, w_p, frame_rgb)
-
-        # ── save side-by-side ─────────────────────────────────────────────
-        ckpt_tag = Path(args.ckpt_path).stem if args.ckpt_path else "untrained"
-        fig, axes = plt.subplots(1, 2, figsize=(8, 4))
-        axes[0].imshow(frame_rgb);  axes[0].set_title("Original"); axes[0].axis("off")
-        axes[1].imshow(vis);        axes[1].set_title(f"Attention ({tag})"); axes[1].axis("off")
-        fname = out_dir / f"{video_stem}_frame{fi:02d}_{ckpt_tag}_{tag}.png"
-        plt.suptitle(f"{video_stem}  frame {fi}  [{ckpt_tag}]", fontsize=9)
-        plt.tight_layout()
-        plt.savefig(fname, dpi=150)
-        plt.close()
-        print(f"  saved {fname}", flush=True)
+        collected_pairs.append((frame_rgb, vis))
 
     for h in hooks:
         h.remove()
+
+    if not collected_pairs:
+        print("No frames processed — nothing to plot.", flush=True)
+        return
+
+    # ── single 2×3 figure: top row = originals, bottom row = attention ───────
+    n = len(collected_pairs)
+    ncols = 3
+    nrows = 2
+    fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 4, nrows * 3.5))
+
+    for col in range(ncols):
+        if col < n:
+            orig, attn_vis = collected_pairs[col]
+            axes[0, col].imshow(orig)
+            axes[0, col].set_title(f"Frame {col}", fontsize=9)
+            axes[1, col].imshow(attn_vis)
+            axes[1, col].set_title(f"Attention", fontsize=9)
+        for row in range(nrows):
+            axes[row, col].axis("off")
+
+    # row labels
+    axes[0, 0].set_ylabel("Original",  fontsize=10, labelpad=6)
+    axes[1, 0].set_ylabel("Attention", fontsize=10, labelpad=6)
+    for row in range(nrows):
+        axes[row, 0].yaxis.label.set_visible(True)
+
+    fig.suptitle(f"{Path(args.video).stem}  [{ckpt_tag}]  ({tag})", fontsize=11)
+    plt.tight_layout()
+
+    fname = out_dir / f"{video_stem}_{ckpt_tag}_{tag}.png"
+    plt.savefig(fname, dpi=150)
+    plt.close()
+    print(f"Saved {fname}", flush=True)
     print("Done.", flush=True)
 
 
