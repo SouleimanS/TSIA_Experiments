@@ -121,6 +121,16 @@ def _saliency(attn_matrix: np.ndarray) -> np.ndarray:
     return attn_matrix.mean(axis=0)
 
 
+def _suppress_sinks(scores: np.ndarray, k: int = 4) -> np.ndarray:
+    """Zero out the top-k saliency outliers (attention sinks) so the heatmap
+    reflects content rather than the few sink tokens that dominate it."""
+    out = scores.copy()
+    if k > 0 and k < len(out):
+        top_idx = np.argpartition(out, -k)[-k:]
+        out[top_idx] = 0.0
+    return out
+
+
 def _to_heatmap(scores: np.ndarray, h_p: int, w_p: int,
                 frame: np.ndarray, alpha: float = 0.55) -> np.ndarray:
     """Resize patch scores to frame size and blend as a heatmap."""
@@ -148,6 +158,9 @@ def main():
                          "Ignored when --rollout is set.")
     ap.add_argument("--rollout",    action="store_true",
                     help="Aggregate all layers via attention rollout.")
+    ap.add_argument("--mask-sinks", type=int, default=4,
+                    help="Zero out the top-k saliency outliers (attention "
+                         "sinks) before plotting. 0 to disable. Default 4.")
     ap.add_argument("--discover",   action="store_true",
                     help="Print module tree and exit.")
     args = ap.parse_args()
@@ -310,6 +323,9 @@ def main():
             scores = _saliency(_rollout(layer_attns))
         else:
             scores = _saliency(layer_attns[args.layer_idx].mean(axis=0))
+
+        if args.mask_sinks > 0:
+            scores = _suppress_sinks(scores, k=args.mask_sinks)
 
         vis = _to_heatmap(scores, h_p, w_p, frame_rgb)
         collected_pairs.append((frame_rgb, vis))
