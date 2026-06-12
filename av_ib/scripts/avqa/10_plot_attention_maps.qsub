@@ -53,16 +53,18 @@ run_attn() {
     local label="$1" video="$2" ckpt="$3"
     local ckpt_arg=""
     [ -n "$ckpt" ] && ckpt_arg="--ckpt-path $ckpt"
+    local subdir="$TMPOUT/$label"
+    mkdir -p "$subdir"
     echo ">>> $label  video=$(basename $video)"
     python -u -m av_ib.eval.plot_llm_attention_maps \
         --video "$video" \
-        --out-dir "$TMPOUT/$label" \
+        --out-dir "$subdir" \
         --variant b_topk_nofusion \
         --n-frames 6 \
         --last-n-layers 8 \
         --question "What is happening in this video?" \
         $ckpt_arg \
-    && echo "  OK $label" \
+    && { echo "  OK $label"; cp "$subdir"/*.png "$FINAL_DIR/$label/" 2>/dev/null || true; } \
     || echo "  FAIL $label"
 }
 
@@ -71,6 +73,11 @@ run_attn() {
 mapfile -t AVH_CLIPS < <(find "$AVH_VIDEO_ROOT" -name "*.mp4" | sort | head -3)
 # AVQA — grab 2 clips
 mapfile -t AVQA_CLIPS < <(find "$AVQA_VIDEO_ROOT" -name "*.mp4" | sort | head -2)
+
+# pre-create label subdirs in FINAL_DIR
+for label in avhbench_untrained avqa_untrained avhbench_v6b_base avqa_v6b_base; do
+    mkdir -p "$FINAL_DIR/$label"
+done
 
 # ── untrained baseline ───────────────────────────────────────────────────────
 for vid in "${AVH_CLIPS[@]}";  do run_attn "avhbench_untrained"   "$vid" ""; done
@@ -84,8 +91,5 @@ else
     echo "SKIP v6b_base (no checkpoint)"
 fi
 
-# ── copy results to persistent location, then wipe temp ─────────────────────
-echo "=== copying results to $FINAL_DIR ==="
-cp -r "$TMPOUT"/. "$FINAL_DIR/"
 echo "=== Done $(date) ==="
 # trap handles rm -rf "$TMPOUT"
