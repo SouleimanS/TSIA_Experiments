@@ -14,6 +14,8 @@ Run on the cluster where runs/avqa/eval/ and the annotations live:
         --eval-dir runs/avqa/eval \
         --ann ~/SOULEIMAN_repo/datasets/AVQA/val_qa.json
 """
+from __future__ import annotations
+
 import argparse
 import json
 import re
