@@ -202,13 +202,18 @@ def main():
 
     q_pos = prompt_len - 1   # last token of the prompt = first assistant token position
 
-    # ── forward (hooks fire, captures q/k per layer) ──────────────────────────
-    print("Running thinker forward...", flush=True)
+    # ── forward via generate (1 token) — proven to work on multi-GPU ─────────
+    # Calling .thinker() directly causes device mismatches with device_map=auto.
+    # model.generate() goes through the outer Qwen3OmniMoeForConditionalGeneration
+    # which has the proper Accelerate AlignDevicesHooks in place.
+    print("Running generate (1 token) to trigger prefill forward...", flush=True)
     with torch.no_grad():
-        model.qwen.model.thinker(
+        model.qwen.model.generate(
             **inputs,
+            max_new_tokens=1,
+            do_sample=False,
+            return_audio=False,
             use_audio_in_video=True,
-            return_dict=True,
         )
 
     for h in hooks:
