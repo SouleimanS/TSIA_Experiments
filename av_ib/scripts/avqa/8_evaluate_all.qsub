@@ -3,16 +3,18 @@
 #PBS -P gae50891
 #PBS -q rt_HF
 #PBS -l select=1
-#PBS -l walltime=10:00:00
+#PBS -l walltime=04:00:00
 #PBS -j oe
 #PBS -o avqa_evaluate_all.qsub.log
 
-# Evaluate every trained checkpoint on the AVQA val split: accuracy (base
-# models) + risk-coverage under corruption (abstention models).
+# Evaluate every trained checkpoint on the AVQA val split in PARALLEL: each
+# model gets its own GPU. Accuracy (base models) + risk-coverage under
+# corruption (abstention models). The 30B model fits on one 80GB A100, so
+# the 6 independent evals run concurrently on GPUs 0-5.
 
-set -euo pipefail
+set -uo pipefail
 cd "$PBS_O_WORKDIR"
-mkdir -p "$PBS_O_WORKDIR/runs/avqa"
+mkdir -p "$PBS_O_WORKDIR/runs/avqa/eval"
 source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
 conda activate av_ib
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
@@ -21,52 +23,71 @@ export HF_DATASETS_OFFLINE=1
 echo "=== Node: $(hostname)  Date: $(date) ==="
 nvidia-smi -L
 
-ANN_TRAIN="$HOME/SOULEIMAN_repo/datasets/AVQA/train_qa.json"
 ANN_VAL="$HOME/SOULEIMAN_repo/datasets/AVQA/val_qa.json"
 VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVQA/videos"
-[ -f "$ANN_TRAIN" ] || { echo "ERROR: $ANN_TRAIN missing — run 1_download_dataset.py" >&2; exit 1; }
+[ -f "$ANN_VAL" ] || { echo "ERROR: $ANN_VAL missing — run 1_download_dataset.py" >&2; exit 1; }
 N_CLIPS=$(find "$VIDEO_ROOT" -name "*.mp4" | wc -l)
-[ "$N_CLIPS" -ge 20000 ] || { echo "ERROR: only $N_CLIPS clips in $VIDEO_ROOT — wait for 1_download_dataset.py to finish." >&2; exit 1; }
-exec > >(tee -a "$PBS_O_WORKDIR/runs/avqa/avqa_evaluate_all_out.txt") 2>&1
+[ "$N_CLIPS" -ge 20000 ] || { echo "ERROR: only $N_CLIPS clips in $VIDEO_ROOT" >&2; exit 1; }
 
-export CUDA_VISIBLE_DEVICES=0
-mkdir -p runs/avqa/eval
+LOGDIR="runs/avqa/eval/logs"
+mkdir -p "$LOGDIR"
 
-# accuracy: base checkpoints + untrained reference
-for tag in v6b_base lora_baseline; do
-    CKPT="runs/avqa/${tag}_final.pt"
-    [ -f "$CKPT" ] || { echo "SKIP $tag (no checkpoint)"; continue; }
-    echo "##### accuracy: $tag #####"
-    python -u -m av_ib.eval.eval_v6_heldout \
-        --ann-path "$ANN_VAL" --video-root "$VIDEO_ROOT" --dataset avqa \
-        --variant b_topk_nofusion \
-        --label "avqa_$tag" --ckpt-path "$CKPT" \
-        --out-dir runs/avqa/eval \
-        --num-samples 300 --seed 99 --train-max-samples 0
-done
-echo "##### accuracy: untrained reference #####"
-python -u -m av_ib.eval.eval_v6_heldout \
-    --ann-path "$ANN_VAL" --video-root "$VIDEO_ROOT" --dataset avqa \
-    --variant b_topk_nofusion \
-    --label avqa_untrained \
-    --out-dir runs/avqa/eval \
+declare -a PIDS=()
+declare -a NAMES=()
+
+run_on_gpu() {
+    # $1 = gpu index, $2 = job name, rest = command
+    local gpu="$1" name="$2"; shift 2
+    [ -e "$LOGDIR/${name}.skip" ] && rm -f "$LOGDIR/${name}.skip"
+    echo ">>> launching $name on GPU $gpu"
+    CUDA_VISIBLE_DEVICES="$gpu" "$@" > "$LOGDIR/${name}.log" 2>&1 &
+    PIDS+=("$!")
+    NAMES+=("$name")
+}
+
+# ── accuracy: base checkpoints + untrained reference (GPUs 0-2) ──
+[ -f runs/avqa/v6b_base_final.pt ]      && run_on_gpu 0 avqa_v6b_base \
+    python -u -m av_ib.eval.eval_v6_heldout --ann-path "$ANN_VAL" --video-root "$VIDEO_ROOT" \
+    --dataset avqa --variant b_topk_nofusion --label avqa_v6b_base \
+    --ckpt-path runs/avqa/v6b_base_final.pt --out-dir runs/avqa/eval \
     --num-samples 300 --seed 99 --train-max-samples 0
 
-# risk-coverage: abstention checkpoints
-declare -A VARIANT=(
-    [video_bottleneck_dpo]=b_video_only
-    [video_bottleneck_sft]=b_video_only
-    [av_bottleneck_dpo]=b_topk_nofusion
-)
-for tag in video_bottleneck_dpo video_bottleneck_sft av_bottleneck_dpo; do
-    CKPT="runs/avqa/${tag}_final.pt"
-    [ -f "$CKPT" ] || { echo "SKIP $tag (no checkpoint)"; continue; }
-    echo "##### risk-coverage: $tag #####"
-    python -u -m av_ib.eval.eval_riskcoverage \
+[ -f runs/avqa/lora_baseline_final.pt ] && run_on_gpu 1 avqa_lora_baseline \
+    python -u -m av_ib.eval.eval_v6_heldout --ann-path "$ANN_VAL" --video-root "$VIDEO_ROOT" \
+    --dataset avqa --variant b_topk_nofusion --label avqa_lora_baseline \
+    --ckpt-path runs/avqa/lora_baseline_final.pt --out-dir runs/avqa/eval \
+    --num-samples 300 --seed 99 --train-max-samples 0
+
+run_on_gpu 2 avqa_untrained \
+    python -u -m av_ib.eval.eval_v6_heldout --ann-path "$ANN_VAL" --video-root "$VIDEO_ROOT" \
+    --dataset avqa --variant b_topk_nofusion --label avqa_untrained \
+    --out-dir runs/avqa/eval --num-samples 300 --seed 99 --train-max-samples 0
+
+# ── risk-coverage: abstention checkpoints (GPUs 3-5) ──
+riskcov() {  # $1 = gpu, $2 = tag, $3 = variant
+    [ -f "runs/avqa/$2_final.pt" ] || { echo "SKIP $2 (no checkpoint)"; return; }
+    run_on_gpu "$1" "$2" \
+        python -u -m av_ib.eval.eval_riskcoverage \
         --ann-path "$ANN_VAL" --video-root "$VIDEO_ROOT" --dataset avqa \
-        --variant "${VARIANT[$tag]}" --ckpt-path "$CKPT" \
+        --variant "$3" --ckpt-path "runs/avqa/$2_final.pt" \
         --num-samples 150 --seed 99 --every 15 \
-        --out-json "runs/avqa/eval/${tag}_riskcoverage.json"
+        --out-json "runs/avqa/eval/$2_riskcoverage.json"
+}
+riskcov 3 video_bottleneck_dpo b_video_only
+riskcov 4 video_bottleneck_sft b_video_only
+riskcov 5 av_bottleneck_dpo    b_topk_nofusion
+
+# ── wait for all, report per-job exit status ──
+echo "=== waiting on ${#PIDS[@]} parallel evals ==="
+FAIL=0
+for i in "${!PIDS[@]}"; do
+    if wait "${PIDS[$i]}"; then
+        echo "  OK   ${NAMES[$i]}"
+    else
+        echo "  FAIL ${NAMES[$i]}  (see $LOGDIR/${NAMES[$i]}.log)"
+        FAIL=1
+    fi
 done
 
-echo "=== Done $(date) ==="
+echo "=== Done $(date)  (FAIL=$FAIL) ==="
+exit $FAIL
