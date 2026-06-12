@@ -1,0 +1,70 @@
+#!/bin/bash
+#PBS -N plot_attention_maps
+#PBS -P gae50891
+#PBS -q rt_HF
+#PBS -l select=1
+#PBS -l walltime=01:00:00
+#PBS -j oe
+#PBS -o plot_attention_maps.qsub.log
+
+set -uo pipefail
+cd "$PBS_O_WORKDIR"
+source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
+conda activate av_ib
+export CUDA_VISIBLE_DEVICES=0
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+echo "=== Node: $(hostname)  Date: $(date) ==="
+nvidia-smi -L
+
+AVH_VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVHBench/data/AVHBench_v0/video"
+AVQA_VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVQA/videos"
+
+# ── output lands in a temp dir on the node's local scratch ──────────────────
+TMPOUT=$(mktemp -d)
+trap 'rm -rf "$TMPOUT"' EXIT   # always clean up node-local temp on exit
+
+FINAL_DIR="$PBS_O_WORKDIR/results/attention_maps"
+mkdir -p "$FINAL_DIR"
+
+run_attn() {
+    # $1 = label, $2 = video path, $3 = ckpt (empty string = untrained)
+    local label="$1" video="$2" ckpt="$3"
+    local ckpt_arg=""
+    [ -n "$ckpt" ] && ckpt_arg="--ckpt-path $ckpt"
+    echo ">>> $label  video=$(basename $video)"
+    python -u -m av_ib.eval.plot_attention_maps \
+        --video "$video" \
+        --out-dir "$TMPOUT/$label" \
+        --variant b_topk_nofusion \
+        --n-frames 6 \
+        --rollout \
+        $ckpt_arg \
+    && echo "  OK $label" \
+    || echo "  FAIL $label"
+}
+
+# ── pick a few representative clips ─────────────────────────────────────────
+# AVHBench — grab the first 3 clips present
+mapfile -t AVH_CLIPS < <(find "$AVH_VIDEO_ROOT" -name "*.mp4" | sort | head -3)
+# AVQA — grab 2 clips
+mapfile -t AVQA_CLIPS < <(find "$AVQA_VIDEO_ROOT" -name "*.mp4" | sort | head -2)
+
+# ── untrained baseline ───────────────────────────────────────────────────────
+for vid in "${AVH_CLIPS[@]}";  do run_attn "avhbench_untrained"   "$vid" ""; done
+for vid in "${AVQA_CLIPS[@]}"; do run_attn "avqa_untrained"       "$vid" ""; done
+
+# ── video bottleneck (base) ──────────────────────────────────────────────────
+if [ -f runs/avqa/v6b_base_final.pt ]; then
+    for vid in "${AVH_CLIPS[@]}";  do run_attn "avhbench_v6b_base" "$vid" "runs/avqa/v6b_base_final.pt"; done
+    for vid in "${AVQA_CLIPS[@]}"; do run_attn "avqa_v6b_base"     "$vid" "runs/avqa/v6b_base_final.pt"; done
+else
+    echo "SKIP v6b_base (no checkpoint)"
+fi
+
+# ── copy results to persistent location, then wipe temp ─────────────────────
+echo "=== copying results to $FINAL_DIR ==="
+cp -r "$TMPOUT"/. "$FINAL_DIR/"
+echo "=== Done $(date) ==="
+# trap handles rm -rf "$TMPOUT"
