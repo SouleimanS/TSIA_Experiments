@@ -54,12 +54,13 @@ run_attn() {
     local ckpt_arg=""
     [ -n "$ckpt" ] && ckpt_arg="--ckpt-path $ckpt"
     echo ">>> $label  video=$(basename $video)"
-    python -u -m av_ib.eval.plot_attention_maps \
+    python -u -m av_ib.eval.plot_llm_attention_maps \
         --video "$video" \
         --out-dir "$TMPOUT/$label" \
         --variant b_topk_nofusion \
         --n-frames 6 \
-        --rollout \
+        --last-n-layers 8 \
+        --question "What is happening in this video?" \
         $ckpt_arg \
     && echo "  OK $label" \
     || echo "  FAIL $label"
