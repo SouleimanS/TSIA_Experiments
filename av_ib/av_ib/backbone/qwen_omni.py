@@ -73,6 +73,7 @@ class QwenOmniWrapper(nn.Module):
         lora_alpha: int = 16,
         lora_dropout: float = 0.0,
         precision: str = "bf16",
+        device_map: str = "auto",
     ):
         super().__init__()
         self.use_lora = use_lora
@@ -83,7 +84,7 @@ class QwenOmniWrapper(nn.Module):
         self.model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
             model_path,
             torch_dtype=dtype,
-            device_map="auto",
+            device_map=device_map,
             trust_remote_code=True,
         )
         self.processor = Qwen3OmniMoeProcessor.from_pretrained(model_path, trust_remote_code=True)

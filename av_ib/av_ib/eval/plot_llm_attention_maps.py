@@ -99,12 +99,17 @@ def main():
                     help="Zero out top-k saliency outliers per frame. 0=off.")
     args = ap.parse_args()
 
-    # ── build model (default flash attention is fine — we use hooks, not output_attentions) ─
-    print("Loading model...", flush=True)
+    # ── build model on a single GPU to avoid multi-GPU device mismatches ─────
+    # With device_map="auto" the 48-layer thinker is sharded across GPUs and
+    # Accelerate's AlignDevicesHook breaks when called outside the normal
+    # generate() path. Forcing everything onto cuda:0 (80 GB) avoids this;
+    # the 30B bf16 model needs ~62 GB which fits with margin.
+    print("Loading model onto cuda:0...", flush=True)
     from av_ib.model.av_model_v6 import AVModelV6
     model = AVModelV6(
         use_lora=bool(args.ckpt_path),
         variant=args.variant,
+        device_map="cuda:0",
     ).eval()
     model.set_sample_noise(False)
 
@@ -202,17 +207,11 @@ def main():
 
     q_pos = prompt_len - 1   # last token of the prompt = first assistant token position
 
-    # ── forward via generate (1 token) — proven to work on multi-GPU ─────────
-    # Calling .thinker() directly causes device mismatches with device_map=auto.
-    # model.generate() goes through the outer Qwen3OmniMoeForConditionalGeneration
-    # which has the proper Accelerate AlignDevicesHooks in place.
-    print("Running generate (1 token) to trigger prefill forward...", flush=True)
+    # ── forward (all on cuda:0 — no device mismatch) ─────────────────────────
+    print("Running thinker forward...", flush=True)
     with torch.no_grad():
-        model.qwen.model.generate(
+        model.qwen.model.thinker(
             **inputs,
-            max_new_tokens=1,
-            do_sample=False,
-            return_audio=False,
             use_audio_in_video=True,
         )
 
