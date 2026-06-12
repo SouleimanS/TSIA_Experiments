@@ -181,7 +181,9 @@ def main():
         raise RuntimeError("No visual tokens found — check video processing.")
 
     # Spatial layout
-    grid_thw = inputs.get("video_grid_thw") or inputs.get("image_grid_thw")
+    _vg = inputs.get("video_grid_thw")
+    _ig = inputs.get("image_grid_thw")
+    grid_thw = _vg if _vg is not None else _ig
     if grid_thw is None:
         raise RuntimeError("No grid_thw in inputs.")
     T, H_p, W_p = int(grid_thw[0, 0]), int(grid_thw[0, 1]), int(grid_thw[0, 2])
