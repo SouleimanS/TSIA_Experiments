@@ -74,11 +74,17 @@ def _score_response(model, inputs, response_str: str, prompt_len: int) -> float:
     return float(out.loss.item())
 
 
-def run_one(model, rec, corr_mode: str, gold: str) -> dict:
-    """Run a single (question, corruption) pair. Returns prediction dict."""
+def run_one(model, rec, corr_mode: str, gold: str, candidates: list[str]) -> dict:
+    """Run a single (question, corruption) pair. Returns prediction dict.
+
+    `candidates` are the dataset's real answer options (e.g. A/B/C/D for AVQA,
+    yes/no for AVHBench). We teacher-force the NLL of each candidate plus the
+    abstain string and pick the lowest-NLL continuation. Gold and all per-option
+    NLLs are stored so risk/coverage can be recomputed offline.
+    """
     from av_ib.eval.explain import make_ablation
 
-    v, a, p = [rec["video_path"]], [rec["audio_path"]], [rec["prompt"]]
+    v = [rec["video_path"]]
     prompt_with_abstain = rec["prompt"] + ABSTAIN_PROMPT_SUFFIX
 
     model.z_ablation = make_ablation(corr_mode) if corr_mode != "identity" else None
@@ -86,28 +92,30 @@ def run_one(model, rec, corr_mode: str, gold: str) -> dict:
     provider, _, _, _ = model._make_provider()
     model.qwen._current_provider = provider
 
+    nlls: dict[str, float] = {}
     try:
         inputs, prompt_len = model.qwen._prep_inputs(v[0], prompt_with_abstain, answer=None)
         with torch.no_grad():
-            nll_yes   = _score_response(model, inputs, "yes",        prompt_len)
-            nll_no    = _score_response(model, inputs, "no",         prompt_len)
-            nll_cant  = _score_response(model, inputs, ABSTAIN_STR,  prompt_len)
+            for c in candidates:
+                nlls[c] = _score_response(model, inputs, c, prompt_len)
+            nlls[ABSTAIN_STR] = _score_response(model, inputs, ABSTAIN_STR, prompt_len)
     finally:
         model.qwen._current_provider = None
         model.z_ablation = None
 
-    scores = {"yes": -nll_yes, "no": -nll_no, "cant": -nll_cant}
-    pred = max(scores, key=scores.__getitem__)
-    abstained = (pred == "cant")
+    # lowest NLL wins (= highest likelihood)
+    pred = min(nlls, key=nlls.get)
+    abstained = (pred == ABSTAIN_STR)
     answered_correct = (not abstained) and (_norm(pred) == _norm(gold))
 
     return {
         "pred": pred,
+        "gold": gold,
         "abstained": abstained,
         "answered_correct": answered_correct,
-        "nll_yes": nll_yes,
-        "nll_no": nll_no,
-        "nll_cant": nll_cant,
+        "nlls": nlls,
+        "video_id": rec.get("meta", {}).get("video_id"),
+        "meta": rec.get("meta", {}),
     }
 
 
@@ -149,9 +157,18 @@ def main():
     else:
         from av_ib.data.musicavqa import MusicAVQADataset
         ds = MusicAVQADataset(args.ann_path, args.video_root)
+    # Real answer options per dataset (scored as teacher-forced continuations).
+    if args.dataset == "avqa":
+        candidates = ["A", "B", "C", "D"]
+    elif args.dataset == "avhbench":
+        candidates = ["yes", "no"]
+    else:
+        candidates = ["yes", "no"]  # musicavqa: legacy binary subset
+
     rng = random.Random(args.seed)
     idxs = sorted(rng.sample(range(len(ds)), min(args.num_samples, len(ds))))
-    print(f"Evaluating {len(idxs)} samples × {len(ALL_CORRS)} corruptions\n", flush=True)
+    print(f"Evaluating {len(idxs)} samples × {len(ALL_CORRS)} corruptions "
+          f"(candidates={candidates})\n", flush=True)
 
     # results[corr] = list of run_one dicts
     results = {c: [] for c in ALL_CORRS}
@@ -161,11 +178,13 @@ def main():
         gold = rec["answer"]
         for corr in ALL_CORRS:
             try:
-                r = run_one(model, rec, corr, gold)
+                r = run_one(model, rec, corr, gold, candidates)
             except Exception as e:
                 print(f"  [{s}] {corr}: skip: {e}", flush=True)
-                r = {"pred": "err", "abstained": False, "answered_correct": False,
-                     "nll_yes": float("nan"), "nll_no": float("nan"), "nll_cant": float("nan")}
+                r = {"pred": "err", "gold": gold, "abstained": False,
+                     "answered_correct": False, "nlls": {},
+                     "video_id": rec.get("meta", {}).get("video_id"),
+                     "meta": rec.get("meta", {})}
             results[corr].append(r)
 
         if (s + 1) % args.every == 0:
