@@ -19,6 +19,21 @@ export HF_DATASETS_OFFLINE=1
 echo "=== Node: $(hostname)  Date: $(date) ==="
 nvidia-smi -L
 
+# ── quick diagnostic: does the model load at all? ────────────────────────────
+echo "--- testing model load ---"
+python -u -c "
+import traceback, sys
+try:
+    from av_ib.model.av_model_v6 import AVModelV6
+    m = AVModelV6(use_lora=False, variant='b_topk_nofusion').eval()
+    print('model load OK', flush=True)
+    print('visual encoder:', type(m.qwen.visual_encoder).__name__, flush=True)
+except Exception:
+    traceback.print_exc()
+    sys.exit(1)
+"
+echo "--- model load test exit=$? ---"
+
 AVH_VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVHBench/data/AVHBench_v0/video"
 AVQA_VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVQA/videos"
 
