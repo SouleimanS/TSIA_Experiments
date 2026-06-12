@@ -9,8 +9,7 @@
 \usepackage{caption}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta, positioning, fit, shapes.geometric}
-\usepackage[backend=biber, style=numeric, sorting=none]{biblatex}
-\addbibresource{refs.bib}
+\usepackage[numbers,sort&compress]{natbib}
 
 \title{\textbf{Audio-Visual Information Bottleneck with Qwen3-Omni}\\
        \large Experiment Report}
@@ -231,6 +230,7 @@ and (iii) audio corruption (\texttt{aud\_zero}/\texttt{aud\_mean}) to also
 affect coverage for audio-driven tasks, unlike the AVQA case.
 
 % ─────────────────────────────────────────────────────────────────────────────
-\printbibliography
+\bibliographystyle{unsrtnat}
+\bibliography{refs}
 
 \end{document}
