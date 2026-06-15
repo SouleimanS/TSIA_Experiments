@@ -84,9 +84,11 @@ class AVModelGated(AVModelV6):
 
             s_v = scale * p[0, 0]
             s_a = scale * p[0, 1]
-            z_j = z_j.clone()
-            z_j[:, :n_v, :] = z_j[:, :n_v, :] * s_v
-            z_j[:, n_v:, :] = z_j[:, n_v:, :] * s_a
+            # fully out-of-place: avoid inplace ops that break autograd versioning
+            z_j = torch.cat([
+                z_j[:, :n_v, :] * s_v,
+                z_j[:, n_v:, :] * s_a,
+            ], dim=1)
 
             self.last_modality_p = p.detach().float().cpu()
             return z_j
