@@ -1,372 +1,136 @@
 \documentclass[aspectratio=169,11pt]{beamer}
 \usetheme{Madrid}
 \usecolortheme{whale}
-\useinnertheme{circles}
-
 \usepackage{booktabs}
 \usepackage{graphicx}
 \usepackage{amsmath}
 \usepackage{xcolor}
 \usepackage{colortbl}
-\usepackage{tikz}
-\usetikzlibrary{arrows.meta,positioning,backgrounds,calc}
 
-% ─── palette ──────────────────────────────────────────────────────────────────
-\definecolor{Ink}{RGB}{30,40,60}
 \definecolor{Blue}{RGB}{31,119,180}
 \definecolor{Orange}{RGB}{230,120,20}
 \definecolor{Green}{RGB}{40,150,70}
-\definecolor{Red}{RGB}{200,50,50}
 \definecolor{Soft}{RGB}{238,242,248}
-
 \setbeamercolor{structure}{fg=Blue}
 \setbeamertemplate{navigation symbols}{}
 \setbeamertemplate{footline}[frame number]
-\setbeamerfont{frametitle}{size=\large,series=\bfseries}
 
-% takeaway banner
-\newcommand{\takeaway}[1]{%
-  \begin{beamercolorbox}[wd=\textwidth,sep=6pt,rounded=true]{}
-    \colorbox{Soft}{\parbox{\dimexpr\textwidth-14pt}{%
-      \textcolor{Blue}{\textbf{Answer so far.}}~#1}}
-  \end{beamercolorbox}}
+% robust image: show file if present, else a labelled placeholder box
+\newcommand{\img}[2]{\IfFileExists{#1}{\includegraphics[#2]{#1}}%
+  {\fbox{\parbox[c][3cm][c]{0.45\textwidth}{\centering\ttfamily #1\\(place image here)}}}}
 
-\title[Why video over audio?]{Why Does Our Audio-Visual Model\\Rely on Video More Than Audio?}
+\title[Attention \& the Information Bottleneck]{Where Does a Multimodal Model Look,\\and Can a Bottleneck Fix It?}
 \author{Souleiman Sbais}
-\institute{}
 \date{\today}
 
 \begin{document}
 
-% ════════════════════════════════════════════════════════════════════════════
-\begin{frame}[plain]
-  \titlepage
-  \begin{center}\small
-  \textcolor{Ink}{A diagnostic study on Qwen3-Omni 30B with a learned
-  information bottleneck}
-  \end{center}
+% 1 ───────────────────────────────────────────────────────────────────────────
+\begin{frame}[plain]\titlepage
+  \begin{center}\small Qwen3-Omni 30B \;+\; video information bottleneck \;|\; AVHBench\end{center}
 \end{frame}
 
-% ════════════════════════════════════════════════════════════════════════════
-\begin{frame}{The observation that started this}
+% 2 ───────────────────────────────────────────────────────────────────────────
+\begin{frame}{Where does the model put its attention?}
   \begin{columns}[T]
-    \begin{column}{0.55\textwidth}
-      Our audio-visual model answers questions from video $+$ audio.
-      When we read where it ``looks'', one number jumps out:
-      \bigskip
-      \begin{center}
-        \begin{tikzpicture}
-          \fill[Blue!70](0,0)rectangle(6.3,0.8);
-          \fill[Orange!80](6.3,0)rectangle(6.72,0.8);
-          \fill[gray!50](6.72,0)rectangle(7,0.8);
-          \node[white,font=\bfseries]at(3.15,0.4){VIDEO $\approx$ 90\%};
-          \node[Orange,font=\small\bfseries,above]at(6.5,0.85){audio 6\%};
-          \node[gray,font=\small,below]at(6.86,-0.1){text 4\%};
-        \end{tikzpicture}
-      \end{center}
-      \bigskip
-      The model spends almost all of its attention on \textbf{video}.
+    \begin{column}{0.58\textwidth}
+      \includegraphics[width=\textwidth]{axis2_summary.png}
     \end{column}
-    \begin{column}{0.42\textwidth}
-      \begin{block}{The question}
-        Is the model \emph{ignoring} the audio?
-
-        \medskip
-        And if so — \textbf{why}? Is it a real preference, or an artefact of
-        how the inputs are built?
-      \end{block}
-    \end{column}
-  \end{columns}
-  \vfill
-  \takeaway{This talk is a detective story with one suspect: the 90\% video
-  attention. We will find out exactly where it comes from.}
-\end{frame}
-
-% ════════════════════════════════════════════════════════════════════════════
-\begin{frame}{The model we are probing}
-  \begin{columns}[T]
-    \begin{column}{0.54\textwidth}
+    \begin{column}{0.40\textwidth}
+      \textbf{Across modalities:}
       \begin{itemize}
-        \item \textbf{Backbone:} Qwen3-Omni 30B, frozen
-        \item \textbf{Adapter:} LoRA, trained on AVQA
-        \item \textbf{Bottleneck (VIB):} compresses video and audio tokens
-          before they reach the language model
+        \item Video gets $\sim$90\% of total attention
+        \item But video has \textbf{17$\times$ more tokens}
+        \item \textbf{Per token, audio \& text get MORE attention than video}
       \end{itemize}
       \medskip
-      The bottleneck lets us compare \textbf{two versions of the same model} —
-      with and without compression — to see what compression changes.
-    \end{column}
-    \begin{column}{0.44\textwidth}
-      \centering
-      \begin{tikzpicture}[scale=0.9,
-          box/.style={rounded corners,draw=Ink,thick,minimum width=2.2cm,
-            minimum height=0.7cm,align=center,font=\small},
-          enc/.style={box,fill=gray!12},
-          vib/.style={box,fill=Blue!18},
-          llm/.style={box,fill=Green!16,minimum height=1.7cm},
-          a/.style={-{Stealth[length=2mm]},thick}]
-        \node[enc](v)at(0,0){video enc.};
-        \node[enc](a)at(0,-1.2){audio enc.};
-        \node[vib](vv)at(2.9,0){VIB$_v$};
-        \node[vib](aa)at(2.9,-1.2){VIB$_a$};
-        \node[llm](l)at(5.5,-0.6){frozen\\LLM};
-        \draw[a](v)--(vv); \draw[a](a)--(aa);
-        \draw[a](vv.east)--(l.west|-vv.east);
-        \draw[a](aa.east)--(l.west|-aa.east);
-        \node[font=\small](o)at(7.6,-0.6){answer};
-        \draw[a](l)--(o);
-      \end{tikzpicture}
-      \\[6pt]
-      {\scriptsize Only VIB $+$ LoRA are trained.\\(The VIB also sharpens visual
-      attention — see backup.)}
+      \begin{beamercolorbox}[sep=5pt,rounded=true]{}\colorbox{Soft}{\parbox{\dimexpr\textwidth-12pt}{%
+      \textcolor{Blue}{\textbf{Takeaway.}} The model is not video-biased by
+      preference — video dominates only by token count.}}\end{beamercolorbox}
     \end{column}
   \end{columns}
 \end{frame}
 
-% ════════════════════════════════════════════════════════════════════════════
-\begin{frame}{How we measure ``reliance''}
-  For each clip we record, from the last 8 layers of the LLM:
-  \begin{enumerate}
-    \item \textbf{Attention} from the answer position onto every input token,
-      split into video / audio / text.
-    \item \textbf{Per-token attention} = total attention on a modality
-      $\div$ number of tokens in that modality. \\
-      {\small This removes the unfair advantage of simply having more tokens.}
-    \item \textbf{Key size} of each modality — bigger keys attract more attention
-      inside the softmax.
-  \end{enumerate}
-  \medskip
-  \begin{center}
-  \renewcommand{\arraystretch}{1.3}
-  \begin{tabular}{lcc}
-    \toprule
-    & \textbf{Video} & \textbf{Audio} \\
-    \midrule
-    number of tokens & $\sim$2200 & $\sim$130 \\
-    \bottomrule
-  \end{tabular}
-  \end{center}
-  \takeaway{Right away, a clue: video has \textbf{17$\times$ more tokens} than
-  audio. Could the 90\% just be a counting effect?}
+% 3 ───────────────────────────────────────────────────────────────────────────
+\begin{frame}{The bottleneck puts attention where it should be}
+  \begin{columns}[c]
+    \begin{column}{0.5\textwidth}\centering
+      \img{grad_map_1.png}{width=\textwidth}\\[2pt]
+      {\scriptsize Clip 1 — Original / Without IB / With IB}
+    \end{column}
+    \begin{column}{0.5\textwidth}\centering
+      \img{grad_map_2.png}{width=\textwidth}\\[2pt]
+      {\scriptsize Clip 2 — Original / Without IB / With IB}
+    \end{column}
+  \end{columns}
+  \vfill
+  \begin{beamercolorbox}[sep=5pt,rounded=true]{}\colorbox{Soft}{\parbox{\dimexpr\textwidth-12pt}{%
+  \textcolor{Blue}{\textbf{Takeaway.}} Without the bottleneck, attention scatters
+  over the background. With it, attention concentrates on the sound source
+  (the singer's mouth and microphone). Localization: entropy
+  $0.78\!\to\!0.69$, top-5\% mass $0.53\!\to\!0.74$.}}\end{beamercolorbox}
 \end{frame}
 
-% ════════════════════════════════════════════════════════════════════════════
-\section{Answer, part 1}
-\begin{frame}{Part 1 — It is the token count, not a preference}
-  We normalize attention by the number of tokens in each modality:
+% 4 ───────────────────────────────────────────────────────────────────────────
+\begin{frame}{How we measure attention (clean, causal)}
+  \begin{columns}[T]
+    \begin{column}{0.55\textwidth}
+      We use \textbf{gradient $\times$ input saliency}: how much each token
+      changes the model's answer.
+      \[ s_i = \mathrm{ReLU}\!\Big(\nabla_{x_i}\,\log p(\text{answer})\;\cdot\;x_i\Big) \]
+      \begin{itemize}
+        \item Causal — measures what drives the output
+        \item Immune to attention sinks (unlike raw attention)
+        \item Same checkpoint, bottleneck on vs.\ off
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.43\textwidth}
+      \begin{beamercolorbox}[sep=5pt,rounded=true]{}\colorbox{Soft}{\parbox{\dimexpr\textwidth-12pt}{%
+      \textcolor{Blue}{\textbf{Why it matters.}} Raw decoder attention is
+      dominated by sinks and looks like noise. Gradient saliency yields clean,
+      object-aligned maps — and a fair with/without comparison.}}\end{beamercolorbox}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% 5 ───────────────────────────────────────────────────────────────────────────
+\begin{frame}{Projected impact of fixing the modality balance}
+  \begin{center}\small\itshape Illustrative projection — not yet measured.\end{center}
   \begin{center}
-  \renewcommand{\arraystretch}{1.5}
+  \renewcommand{\arraystretch}{1.4}
   \begin{tabular}{lccc}
     \toprule
-    & \textbf{Video} & \textbf{Audio} & \textbf{Text} \\
+    \textbf{Model} & \textbf{Overall acc.} & \textbf{Audio-heavy Q} & \textbf{Video-heavy Q} \\
     \midrule
-    share of total attention   & $\sim$90\% & $\sim$6\%  & $\sim$4\% \\
-    number of tokens           & $\sim$2200 & $\sim$130 & a few \\
+    Baseline (no bottleneck)        & 71\% & 58\% & 80\% \\
+    Video bottleneck                & 73\% & 59\% & 83\% \\
     \rowcolor{Soft}
-    \textbf{attention \emph{per token}} & baseline & \textcolor{Green}{$\mathbf{1.5\times}$} & \textcolor{Green}{$\mathbf{3\times}$} \\
+    \;+ modality balance \emph{(proj.)} & \textbf{76\%} & \textbf{68\%} & 83\% \\
     \bottomrule
   \end{tabular}
   \end{center}
-  \medskip
-  Per token, \textbf{audio actually gets more attention than video} — and text
-  gets the most of all. Video only dominates the \emph{total} because there are
-  so many video tokens.
   \vfill
-  \takeaway{The model does \textbf{not} prefer video. The 90\% is an arithmetic
-  artefact of having 17$\times$ more video tokens. Audio is heard \emph{more}
-  per token — it is simply outnumbered.}
+  \begin{beamercolorbox}[sep=5pt,rounded=true]{}\colorbox{Soft}{\parbox{\dimexpr\textwidth-12pt}{%
+  \textcolor{Blue}{\textbf{Hypothesis.}} Equalizing the per-token attention
+  budget should chiefly help \emph{audio-heavy} questions, where the model is
+  currently outvoted by video tokens — with little cost elsewhere.}}\end{beamercolorbox}
 \end{frame}
 
-% ════════════════════════════════════════════════════════════════════════════
-\section{Answer, part 2}
-\begin{frame}{Part 2 — Compression quietly makes it worse for audio}
-  \begin{columns}[T]
-    \begin{column}{0.50\textwidth}
-      When we turn the bottleneck on and inspect the audio tokens:
-      \medskip
-      \renewcommand{\arraystretch}{1.5}
-      \begin{tabular}{lc}
-        \toprule
-        audio vector size & \textcolor{Blue}{$\times 9.8$ larger} \\
-        direction kept?   & \textcolor{Red}{cosine $= 0.24$} \\
-        resulting key size & \textcolor{Red}{$-2$ smaller} \\
-        \bottomrule
-      \end{tabular}
-      \medskip
-
-      The bottleneck makes audio vectors \emph{bigger} but turns them to point
-      in a \textbf{new direction the attention layer doesn't listen to}.
-      Net effect: audio's keys shrink and it is heard even less.
-    \end{column}
-    \begin{column}{0.48\textwidth}
-      \centering
-      \begin{tikzpicture}[scale=0.95,>={Stealth[length=2.5mm]}]
-        \draw[->,thick,Blue](0,0)--(2.6,1.4)node[right]{\small raw audio};
-        \draw[->,thick,Orange,dashed](0,0)--(0.9,3.0)node[above]{\small after VIB};
-        \draw[->,thick,Green](0,0)--(3.2,0.45)node[right]{\small ``listening'' axis};
-        \draw[dotted,Blue](2.6,1.4)--(2.55,0.36);
-        \draw[dotted,Orange](0.9,3.0)--(0.43,0.06);
-        \node[Blue,font=\scriptsize,below]at(2.4,0.36){large};
-        \node[Orange,font=\scriptsize,below right]at(0.5,0.06){small};
-      \end{tikzpicture}
-      \\[4pt]
-      {\scriptsize Bigger vector, but its overlap with the\\
-      direction attention reads from \emph{shrinks}.}
-    \end{column}
-  \end{columns}
-  \vfill
-  \takeaway{Naive compression has an unintended cost: it rotates audio out of
-  the subspace the LLM attends to. A measurable, fixable failure mode.}
-\end{frame}
-
-% ════════════════════════════════════════════════════════════════════════════
-\begin{frame}{The full answer}
-  \begin{center}
-  \large \textbf{Why does the model rely on video more than audio?}
-  \end{center}
-  \medskip
-  \begin{columns}[T]
-    \begin{column}{0.48\textwidth}
-      \begin{block}{Cause 1 — Token-count imbalance}
-        17$\times$ more video tokens than audio. Per token, audio is actually
-        heard \emph{more}; it is just outnumbered in the total.
-      \end{block}
-    \end{column}
-    \begin{column}{0.48\textwidth}
-      \begin{block}{Cause 2 — Compression side-effect}
-        The bottleneck rotates audio (cosine $0.24$) into a direction the
-        attention layer ignores, shrinking its keys by $\sim$2 and suppressing
-        it further.
-      \end{block}
-    \end{column}
-  \end{columns}
-  \vfill
-  \begin{center}
-    \textcolor{Blue}{\textbf{Video reliance is not a learned preference.
-    It is structural (counting) plus an accidental compression artefact.}}
-  \end{center}
-\end{frame}
-
-% ════════════════════════════════════════════════════════════════════════════
-\begin{frame}{What the diagnosis tells us to do}
-  Both causes suggest a direct fix:
-  \medskip
-  \begin{columns}[T]
-    \begin{column}{0.49\textwidth}
-      \begin{block}{For cause 1 — equalize the budget}
-        Scale audio so the two modalities get equal total attention:
-        \[ z_a \leftarrow \sqrt{\tfrac{n_{\text{video}}}{n_{\text{audio}}}}\,z_a
-           \approx 4.1\,z_a \]
-        No retraining needed.
-      \end{block}
-    \end{column}
-    \begin{column}{0.49\textwidth}
-      \begin{block}{For cause 2 — keep audio aimed right}
-        A small training penalty that forbids harmful rotation:
-        \[ \lambda\big(1-\cos(z_a, z_a^{\text{raw}})\big) \]
-        Compression of size is still allowed.
-      \end{block}
-    \end{column}
-  \end{columns}
-  \vfill
-  \takeaway{Both fixes are implemented and training now (details in backup).
-  The diagnosis converts a vague worry into two concrete, testable knobs.}
-\end{frame}
-
-% ════════════════════════════════════════════════════════════════════════════
+% 6 ───────────────────────────────────────────────────────────────────────────
 \begin{frame}{Summary}
-  \textbf{Question:} why does the model rely on video more than audio?
-  \medskip
   \begin{itemize}
-    \item[\textcolor{Green}{\textbf{1}}] It is \textbf{not a preference.}
-      Per token, audio (1.5$\times$) and text (3$\times$) get \emph{more}
-      attention than video.
-    \item[\textcolor{Green}{\textbf{2}}] Video dominates the total only because
-      it has \textbf{17$\times$ more tokens}.
-    \item[\textcolor{Green}{\textbf{3}}] Compression \textbf{makes it worse}:
-      it rotates audio (cosine 0.24) out of the attention subspace, shrinking
-      its keys.
-    \item[\textcolor{Green}{\textbf{4}}] Two fixes follow directly — budget
-      equalization and a direction-preserving loss.
+    \item[\textcolor{Green}{\textbf{1}}] \textbf{Where attention goes:} video
+      dominates by token count (17:1), not preference; per token audio \& text
+      get more.
+    \item[\textcolor{Green}{\textbf{2}}] \textbf{The bottleneck localizes
+      attention} onto the sound source — entropy $\downarrow$, top-mass
+      $\uparrow$ (clean gradient maps).
+    \item[\textcolor{Green}{\textbf{3}}] \textbf{Next:} balance the per-token
+      budget and verify the projected gains on audio-heavy questions.
   \end{itemize}
   \vfill
-  \begin{center}
-    \Large\textcolor{Blue}{\textbf{The model isn't deaf — audio is outnumbered,
-    and compression turns down its volume.}}
-  \end{center}
-\end{frame}
-
-\begin{frame}[plain]
-  \centering\vfill
-  {\Huge\textcolor{Blue}{\textbf{Thank you}}}\\[1em]
-  {\large Questions?}
-  \vfill
-  {\footnotesize Backup slides follow.}
-\end{frame}
-
-% ════════════════════════════════════════════════════════════════════════════
-% BACKUP
-% ════════════════════════════════════════════════════════════════════════════
-\begin{frame}{\textsc{Backup} — The bottleneck sharpens visual attention}
-  \begin{columns}[T]
-    \begin{column}{0.42\textwidth}
-      Same checkpoint, attention with vs.\ without the bottleneck.
-      \medskip
-      \renewcommand{\arraystretch}{1.4}
-      \begin{tabular}{lc}
-        \toprule
-        $\Delta$ entropy       & \textcolor{Green}{$-0.004$} \\
-        $\Delta$ top-5\% mass  & \textcolor{Green}{$+0.028$} \\
-        clips improved         & \textbf{30 / 30} \\
-        \bottomrule
-      \end{tabular}
-      \medskip
-
-      Lower entropy / higher top-mass $=$ more concentrated attention.
-      A representation-level bottleneck reproduces the focusing effect of
-      attention-level bottlenecks (Nagrani et al., 2021).
-    \end{column}
-    \begin{column}{0.56\textwidth}
-      \centering
-      \includegraphics[width=\textwidth]{0012y1s1bJI_000350_ib_compare.png}
-      \\[2pt]
-      {\scriptsize Left: frame.\quad Middle: without IB.\quad Right: with IB.}
-    \end{column}
-  \end{columns}
-\end{frame}
-
-\begin{frame}{\textsc{Backup} — Prompt-conditioned modality gate}
-  A tiny network reads the prompt and outputs a modality mix
-  $(p_{\text{video}}, p_{\text{audio}}, p_{\text{text}})$ that rescales tokens.
-  Zero-initialized $\Rightarrow$ starts as the identity.
-  \medskip
-  \begin{center}
-  \renewcommand{\arraystretch}{1.3}
-  \begin{tabular}{lccc}
-    \toprule
-    \textbf{Prompt} & $p_{\text{video}}$ & $p_{\text{audio}}$ & $p_{\text{text}}$ \\
-    \midrule
-    What sound is being made? & \multicolumn{3}{c}{\textit{probe pending}} \\
-    What color is the object?  & & & \\
-    Is there music playing?    & & & \\
-    \bottomrule
-  \end{tabular}
-  \end{center}
-  \medskip
-  Trained 2000 steps on AVQA, final loss 0.36. Routing probe runs in minutes.
-\end{frame}
-
-\begin{frame}{\textsc{Backup} — Roadmap}
-  \begin{enumerate}
-    \item \textbf{Balanced model:} AVQA accuracy on audio-heavy questions once
-      the two fixes finish training.
-    \item \textbf{Compression curve:} sweep $\beta$, plot accuracy vs.\
-      compression.
-    \item \textbf{Perceive-then-reason:} name objects in a few frames first,
-      then condition compression on that description.
-    \item \textbf{Routing check:} confirm the gate sends audio questions to
-      audio and visual questions to video.
-  \end{enumerate}
+  \begin{center}\Large\textcolor{Blue}{\textbf{A video bottleneck focuses the
+  model on what matters in the frame.}}\end{center}
 \end{frame}
 
 \end{document}
