@@ -174,7 +174,7 @@ def _analyse_clip(model, video_path: str, question: str,
     print(f"  prompt_len={prompt_len}, total_len={L}", flush=True)
 
     # ── get video/audio token positions via splicer mask ─────────────────────
-    splicer = model.qwen.model.thinker._splicer
+    splicer = model.qwen.splicer
     orig_clear = splicer._clear_per_call_state
     splicer._clear_per_call_state = lambda: None   # prevent mask clearing
 
