@@ -3,7 +3,7 @@
 #PBS -P gae50891
 #PBS -q rt_HF
 #PBS -l select=1
-#PBS -l walltime=01:00:00
+#PBS -l walltime=03:00:00
 #PBS -j oe
 #PBS -o ib_attention.qsub.log
 #PBS -k oe
@@ -50,8 +50,8 @@ run_one() {
     || echo "  FAIL"
 }
 
-mapfile -t AVH_CLIPS  < <(find "$AVH_VIDEO_ROOT"  -name "*.mp4" | sort | head -3)
-mapfile -t AVQA_CLIPS < <(find "$AVQA_VIDEO_ROOT" -name "*.mp4" | sort | head -2)
+mapfile -t AVH_CLIPS  < <(find "$AVH_VIDEO_ROOT"  -name "*.mp4" | sort | head -15)
+mapfile -t AVQA_CLIPS < <(find "$AVQA_VIDEO_ROOT" -name "*.mp4" | sort | head -15)
 
 for vid in "${AVH_CLIPS[@]}";  do run_one "$vid"; done
 for vid in "${AVQA_CLIPS[@]}"; do run_one "$vid"; done
