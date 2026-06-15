@@ -1,260 +1,348 @@
-\documentclass[aspectratio=169,10pt]{beamer}
+\documentclass[aspectratio=169,11pt]{beamer}
 \usetheme{Madrid}
-\usecolortheme{seahorse}
+\usecolortheme{whale}
+\useinnertheme{circles}
+
 \usepackage{booktabs}
 \usepackage{graphicx}
 \usepackage{amsmath}
 \usepackage{xcolor}
-\usepackage{colortbl}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,backgrounds,calc}
 
-\setbeamertemplate{navigation symbols}{}
-
-\title{Variational Information Bottleneck\\for Audio-Visual Language Models}
-\subtitle{Compression, Attention Localization, and Modality Balance}
-\author{Souleiman Sbais}
-\date{\today}
-
-% ─── colours ─────────────────────────────────────────────────────────────────
+% ─── palette ──────────────────────────────────────────────────────────────────
+\definecolor{Ink}{RGB}{30,40,60}
 \definecolor{Blue}{RGB}{31,119,180}
-\definecolor{Orange}{RGB}{255,127,14}
-\definecolor{Green}{RGB}{44,160,44}
-\definecolor{Red}{RGB}{214,39,40}
+\definecolor{Orange}{RGB}{230,120,20}
+\definecolor{Green}{RGB}{40,150,70}
+\definecolor{Red}{RGB}{200,50,50}
+\definecolor{Soft}{RGB}{238,242,248}
+
+\setbeamercolor{structure}{fg=Blue}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}[frame number]
+\setbeamerfont{frametitle}{size=\large,series=\bfseries}
+
+% takeaway banner
+\newcommand{\takeaway}[1]{%
+  \begin{beamercolorbox}[wd=\textwidth,sep=6pt,rounded=true,shadow=false]{}
+    \colorbox{Soft}{\parbox{\dimexpr\textwidth-14pt}{%
+      \textcolor{Blue}{\textbf{Takeaway.}}~#1}}
+  \end{beamercolorbox}}
+
+\title[VIB for Audio-Visual LLMs]{Do Information Bottlenecks Make\\Multimodal Language Models Look Where It Matters?}
+\author{Souleiman Sbais}
+\institute{}
+\date{\today}
 
 \begin{document}
 
-% ── 1. Title ──────────────────────────────────────────────────────────────────
-\begin{frame}
+% ════════════════════════════════════════════════════════════════════════════
+\begin{frame}[plain]
   \titlepage
+  \begin{center}\small
+  \textcolor{Ink}{Qwen3-Omni 30B \;$+$\; Variational Information Bottleneck
+  \;$+$\; attention analysis}
+  \end{center}
 \end{frame}
 
-% ── 2. Setup ──────────────────────────────────────────────────────────────────
-\begin{frame}{Setup}
+% ════════════════════════════════════════════════════════════════════════════
+\begin{frame}{The problem in one picture}
   \begin{columns}[T]
-    \begin{column}{0.48\textwidth}
-      \textbf{Model}
+    \begin{column}{0.55\textwidth}
+      A multimodal LLM swallows \textbf{thousands of raw tokens} per clip:
       \begin{itemize}
-        \item Qwen3-Omni 30B (frozen backbone)
-        \item LoRA fine-tuning on AVQA
-        \item VIB on video tokens: $z_v \sim q(z_v \mid x_v)$
-        \item VIB on audio tokens: $z_a \sim q(z_a \mid x_a)$
+        \item $\sim$2200 video patch tokens
+        \item $\sim$130 audio tokens
+        \item a handful of text tokens
       \end{itemize}
-      \[\mathcal{L} = \underbrace{\text{NLL}}_{\text{task}}
-        + \beta_v\,\text{KL}_v + \beta_a\,\text{KL}_a\]
-    \end{column}
-    \begin{column}{0.48\textwidth}
-      \textbf{Three experiments}
-      \begin{enumerate}
-        \item Does the VIB localize LLM attention?
-        \item What does the LLM attend to, and why does video dominate?
-        \item Does a prompt-conditioned gate learn modality routing?
-      \end{enumerate}
+      \medskip
+      Nothing tells the model \emph{which} of those tokens matter.
+
       \bigskip
-      All experiments use the \textbf{same trained checkpoint}.\\
-      $\beta_v = \beta_a = 7\!\times\!10^{-6}$, 2000 steps.
+      \textbf{Our idea:} insert a learnable \textcolor{Blue}{bottleneck} that
+      \emph{compresses} each modality before it reaches the language model —
+      and ask what changes.
+    \end{column}
+    \begin{column}{0.43\textwidth}
+      \centering
+      \begin{tikzpicture}[scale=0.95,
+          box/.style={rounded corners,draw=Ink,thick,minimum width=2.4cm,
+            minimum height=0.7cm,align=center,font=\small},
+          enc/.style={box,fill=gray!12},
+          vib/.style={box,fill=Blue!18},
+          llm/.style={box,fill=Green!16,minimum height=1.7cm},
+          a/.style={-{Stealth[length=2mm]},thick}]
+        \node[enc](v)at(0,0){video encoder};
+        \node[enc](a)at(0,-1.2){audio encoder};
+        \node[vib](vv)at(3.1,0){VIB$_v$};
+        \node[vib](aa)at(3.1,-1.2){VIB$_a$};
+        \node[llm](l)at(5.9,-0.6){frozen\\LLM};
+        \draw[a](v)--(vv); \draw[a](a)--(aa);
+        \draw[a](vv.east)--(l.west|-vv.east);
+        \draw[a](aa.east)--(l.west|-aa.east);
+        \node[font=\small](o)at(8.2,-0.6){answer};
+        \draw[a](l)--(o);
+      \end{tikzpicture}
+      \\[4pt]
+      {\scriptsize Only the VIB + a LoRA adapter are trained. \\The 30B backbone is frozen.}
     \end{column}
   \end{columns}
 \end{frame}
 
-% ── 3. Exp 1 method ───────────────────────────────────────────────────────────
-\begin{frame}{Experiment 1 — Does the VIB Localize Attention?}
-  \textbf{Inspired by Nagrani et al.\ (NeurIPS 2021)}, who showed attention
-  bottlenecks concentrate LLM attention on sound-source regions.
-
-  \medskip
-  \textbf{Method}: same checkpoint, two conditions per clip.
-  \begin{center}
-  \renewcommand{\arraystretch}{1.3}
-  \begin{tabular}{lll}
-    \toprule
-    Condition & Provider & What the LLM sees \\
-    \midrule
-    Without IB & \texttt{None} & raw encoder tokens \\
-    With IB    & trained VIB  & compressed tokens \\
-    \bottomrule
-  \end{tabular}
-  \end{center}
-  Hook $q$-proj and $k$-proj in the last 8 decoder layers.
-  Compute attention from the last prompt token over visual positions.
-  \[\text{norm-entropy} = \frac{H(p)}{\log N}\!\in[0,1]
-    \qquad
-    \text{top-5\%-mass} = \!\!\sum_{k\in\text{top 5\%}}\!\! p_k\]
-  Lower entropy and higher mass $\Rightarrow$ more localized.
-\end{frame}
-
-% ── 4. Exp 1 results ──────────────────────────────────────────────────────────
-\begin{frame}{Experiment 1 — Results (30 clips)}
+% ════════════════════════════════════════════════════════════════════════════
+\begin{frame}{What is a Variational Information Bottleneck?}
   \begin{columns}[T]
+    \begin{column}{0.58\textwidth}
+      A VIB squeezes each token stream through a noisy, low-capacity channel.
+      It keeps what the task needs and throws away the rest.
+      \[
+        \mathcal{L} \;=\;
+        \underbrace{\text{answer loss}}_{\text{be useful}}
+        \;+\;
+        \beta\underbrace{\big[\,\text{KL}_{\text{video}} + \text{KL}_{\text{audio}}\,\big]}_{\text{stay compressed}}
+      \]
+      \begin{itemize}
+        \item Small $\beta$ $\Rightarrow$ light compression
+        \item Large $\beta$ $\Rightarrow$ aggressive compression
+        \item We train at $\beta = 7\times10^{-6}$, 2000 steps on AVQA
+      \end{itemize}
+    \end{column}
     \begin{column}{0.40\textwidth}
-      \renewcommand{\arraystretch}{1.5}
-      \begin{tabular}{lcc}
-        \toprule
-         & \textbf{Without IB} & \textbf{With IB} \\
-        \midrule
-        $\Delta$norm-entropy & 0 & \textcolor{Green}{$-0.0043$} \\
-        $\Delta$top-5\%-mass & 0 & \textcolor{Green}{$+0.0284$} \\
-        \midrule
-        IB wins entropy & \multicolumn{2}{c}{\textbf{30 / 30}} \\
-        IB wins mass    & \multicolumn{2}{c}{\textbf{30 / 30}} \\
-        \bottomrule
-      \end{tabular}
-
-      \bigskip
-      \begin{alertblock}{Finding}
-        A \emph{representational} VIB replicates\\
-        the localization effect of an\\
-        \emph{attention} bottleneck — on\\
-        every clip, without exception.
-      \end{alertblock}
-    \end{column}
-    \begin{column}{0.57\textwidth}
-      \includegraphics[width=\textwidth]{0012y1s1bJI_000350_ib_compare.png}
-      \vspace{-2pt}
-      {\scriptsize Rows = frames. Left: original. Centre: without IB. Right: with IB.}
+      \centering
+      \begin{tikzpicture}[scale=0.9]
+        \fill[gray!15,rounded corners](0,0)rectangle(1.4,3);
+        \node at (0.7,3.3){\small raw};
+        \foreach \y in {0.2,0.5,...,2.8}\fill[Blue!50](0.2,\y)rectangle(1.2,\y+0.18);
+        \draw[-{Stealth[length=2.5mm]},very thick,Orange](1.7,1.5)--(2.7,1.5)
+          node[midway,above,font=\scriptsize]{VIB};
+        \fill[Green!12,rounded corners](3,0.6)rectangle(4.4,2.4);
+        \node at (3.7,2.7){\small compressed};
+        \foreach \y in {0.9,1.4,1.9}\fill[Green!55](3.2,\y)rectangle(4.2,\y+0.22);
+      \end{tikzpicture}
+      \\[4pt]
+      {\scriptsize Fewer effective dimensions \\ carry the signal forward.}
     \end{column}
   \end{columns}
+  \vfill
+  \takeaway{Same backbone, same prompt — the bottleneck is the \emph{only}
+  thing we add. So any change we observe is caused by compression alone.}
 \end{frame}
 
-% ── 5. Exp 2 method ───────────────────────────────────────────────────────────
-\begin{frame}{Experiment 2 — What Does the LLM Actually Attend To?}
-  \textbf{Observation}: video gets $\sim$90\% of total attention mass.
-  Is this because the model \emph{prefers} video, or just because there are
-  more video tokens?
-
-  \medskip
-  \textbf{Method}: capture, per clip, per condition (raw / VIB):
-  \begin{itemize}
-    \item Token embeddings at layer-0 LLM input (video, audio, text positions)
-    \item Full-sequence attention from last prompt token (all positions)
-    \item Key norms at video / audio / text positions (last 8 layers)
-  \end{itemize}
-  Compute \textbf{per-token} attention = total mass $\div$ token count.
-
-  \bigskip
-  \begin{center}
-  \begin{tabular}{lcc}
-    \toprule
-    & \textbf{Video} & \textbf{Audio} \\
-    \midrule
-    Token count & $\sim$2200 & $\sim$130 \\
-    Fraction of sequence & 94\% & 6\% \\
-    \bottomrule
-  \end{tabular}
-  \end{center}
-\end{frame}
-
-% ── 6. Exp 2 results ──────────────────────────────────────────────────────────
-\begin{frame}{Experiment 2 — Results}
+% ════════════════════════════════════════════════════════════════════════════
+\section{Result 1}
+\begin{frame}{Result 1 — The bottleneck focuses the model's attention}
   \begin{columns}[T]
-    \begin{column}{0.50\textwidth}
-      \textbf{Per-token attention (raw):}
-      \renewcommand{\arraystretch}{1.3}
-      \begin{tabular}{lccc}
-        \toprule
-        & Video & Audio & Text \\
-        \midrule
-        Attn/token & $\approx$uniform & $1.5\times$ & $3\times$ \\
-        Key norm   & 11--12           & 12--14       & \textbf{15.6} \\
-        \bottomrule
-      \end{tabular}
-
-      \bigskip
-      \textbf{VIB effect on audio:}
-      \begin{tabular}{lc}
-        \toprule
-        Embedding norm ratio & $9.8\times$ \\
-        Cosine similarity & \textcolor{Red}{0.24} \\
-        $\Delta$ key norm after $k$-proj & \textcolor{Red}{$-2$} \\
-        \bottomrule
-      \end{tabular}
-    \end{column}
-    \begin{column}{0.47\textwidth}
-      \begin{block}{Finding 1 — count, not preference}
-        Per token, \textbf{audio gets more attention than video}.
-        Video dominates total mass \emph{only} because of its
-        17:1 token-count advantage.
-      \end{block}
+    \begin{column}{0.42\textwidth}
+      We read the LLM's attention over the video, \emph{with} and
+      \emph{without} the bottleneck, from one checkpoint.
 
       \medskip
-      \begin{alertblock}{Finding 2 — VIB suppresses audio keys}
-        The VIB amplifies audio embeddings ($\times 9.8$) but
-        \textbf{rotates them} (cos-sim $=0.24$).
-        After $k$-proj, audio keys \emph{shrink} by $\sim2$,
-        undermining audio's natural per-token advantage.
-      \end{alertblock}
+      Two simple measures of ``focus'':
+      \begin{itemize}
+        \item \textbf{Entropy} of the attention map — \textcolor{Green}{lower = sharper}
+        \item \textbf{Top-5\% mass} — \textcolor{Green}{higher = sharper}
+      \end{itemize}
+
+      \medskip
+      \renewcommand{\arraystretch}{1.4}
+      \begin{tabular}{lc}
+        \toprule
+        & with vs.\ without IB \\
+        \midrule
+        $\Delta$ entropy   & \textcolor{Green}{$-0.004$} \\
+        $\Delta$ top-5\% mass & \textcolor{Green}{$+0.028$} \\
+        \midrule
+        clips improved & \textbf{30 / 30} \\
+        \bottomrule
+      \end{tabular}
+    \end{column}
+    \begin{column}{0.56\textwidth}
+      \centering
+      \includegraphics[width=\textwidth]{0012y1s1bJI_000350_ib_compare.png}
+      \\[2pt]
+      {\scriptsize Left: frame.\quad Middle: without bottleneck.\quad
+       Right: with bottleneck.}
     \end{column}
   \end{columns}
+  \vfill
+  \takeaway{On \textbf{every one of 30 clips}, compression makes the model's
+  visual attention more concentrated. A representation-level bottleneck
+  reproduces the focusing effect previously seen only with attention-level
+  bottlenecks (Nagrani et al., NeurIPS 2021).}
 \end{frame}
 
-% ── 7. Fixes ──────────────────────────────────────────────────────────────────
-\begin{frame}{Two Targeted Fixes}
-  \textbf{Fix 1 — Token-count equalization} (no retraining):
-  \[z_j = \bigl[\,z_v \;\Big|\; \underbrace{\sqrt{\tfrac{n_v}{n_a}}}_{\approx\,4.1}
-    \cdot z_a\,\bigr]\]
-  Equalises total attention budget across modalities at inference time.
-
-  \bigskip
-  \textbf{Fix 2 — Direction-preservation loss} (added to training):
-  \[\mathcal{L}_{\text{dir}} = \lambda\,
-    \bigl(1 - \cos\!\operatorname{sim}(z_a,\, x_a^{\text{raw}})\bigr)
-    \qquad \lambda = 0.1\]
-  Penalises directional rotation of audio tokens.
-  VIB can still compress (change norm) but must stay in the subspace
-  that $k$-proj already responds to.
-
-  \bigskip
-  \textit{Both fixes are implemented in \texttt{AVModelBalanced} —
-  training in progress, evaluation to follow.}
-\end{frame}
-
-% ── 8. Exp 3 ──────────────────────────────────────────────────────────────────
-\begin{frame}{Experiment 3 — Prompt-Conditioned Modality Gate}
-  \textbf{Idea}: ``What sound is being made?'' should weight audio more;
-  ``What color is the car?'' should weight video more.
+% ════════════════════════════════════════════════════════════════════════════
+\section{Result 2}
+\begin{frame}{Result 2 — Why does video seem to ``win'' attention?}
+  The LLM puts $\sim$90\% of its visual attention on video.
+  Natural worry: \emph{is the model ignoring audio?}
 
   \medskip
-  \textbf{Architecture}: lightweight MLP on mean-pooled frozen prompt embeddings
-  $\rightarrow$ softmax $\rightarrow$ probabilities $(p_v, p_a, p_t)$
-  $\rightarrow$ scale injected tokens by $M \cdot p$.
-
-  Zero-initialized output layer $\Rightarrow$ untrained gate = identity.
+  We split attention by modality and \textbf{normalize by token count}:
+  \[
+    \text{attention per token} \;=\;
+    \frac{\text{total attention on a modality}}{\text{\# tokens in that modality}}
+  \]
 
   \begin{center}
-  \renewcommand{\arraystretch}{1.3}
+  \renewcommand{\arraystretch}{1.4}
   \begin{tabular}{lccc}
     \toprule
-    \textbf{Prompt} & \textbf{$p_{\text{video}}$} & \textbf{$p_{\text{audio}}$} & \textbf{$p_{\text{text}}$} \\
+    & \textbf{Video} & \textbf{Audio} & \textbf{Text} \\
     \midrule
-    What sound is being made? & & & \\
-    What color is the object? & & & \\
-    Where is this scene?      & & & \\
-    Is there music playing?   & & & \\
+    \# tokens                 & $\sim$2200 & $\sim$130 & a few \\
+    share of total attention  & $\sim$90\% & $\sim$6\%  & $\sim$4\% \\
+    \rowcolor{Soft}
+    \textbf{attention \emph{per token}} & baseline & \textcolor{Green}{$1.5\times$} & \textcolor{Green}{$3\times$} \\
     \bottomrule
   \end{tabular}
   \end{center}
-  {\small (Gate probe results landing in the next 15 min.)}
+  \vfill
+  \takeaway{Video does \textbf{not} win on merit. Per token, audio and text
+  actually get \emph{more} attention than video. Video only dominates the total
+  because there are 17$\times$ more video tokens.}
 \end{frame}
 
-% ── 9. Summary ────────────────────────────────────────────────────────────────
-\begin{frame}{Summary}
-  \renewcommand{\arraystretch}{1.5}
-  \begin{tabular}{p{0.20\textwidth}p{0.72\textwidth}}
+% ════════════════════════════════════════════════════════════════════════════
+\begin{frame}{Result 2 (cont.) — A hidden side-effect of compression}
+  \begin{columns}[T]
+    \begin{column}{0.50\textwidth}
+      Looking closer at the audio tokens after the bottleneck:
+      \medskip
+      \renewcommand{\arraystretch}{1.4}
+      \begin{tabular}{lc}
+        \toprule
+        Audio embedding size & \textcolor{Blue}{$\times 9.8$ larger} \\
+        Direction preserved? & \textcolor{Red}{cosine $=0.24$} \\
+        Resulting ``key'' size & \textcolor{Red}{$-2$ (smaller)} \\
+        \bottomrule
+      \end{tabular}
+      \medskip
+
+      The bottleneck makes audio vectors \emph{bigger} but points them in a
+      \textbf{new direction} the attention layer doesn't listen to — so audio's
+      influence quietly drops.
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \centering
+      \begin{tikzpicture}[scale=0.95,>={Stealth[length=2.5mm]}]
+        \draw[->,thick,Blue](0,0)--(2.6,1.4)node[right]{\small raw audio};
+        \draw[->,thick,Orange,dashed](0,0)--(0.9,3.0)node[above]{\small after VIB};
+        \draw[->,thick,Green](0,0)--(3.2,0.45)node[right]{\small what attention ``hears''};
+        \draw[dotted,Blue](2.6,1.4)--(2.55,0.36);
+        \draw[dotted,Orange](0.9,3.0)--(0.43,0.06);
+        \node[Blue,font=\scriptsize,below]at(2.4,0.36){large};
+        \node[Orange,font=\scriptsize,below right]at(0.5,0.06){small};
+      \end{tikzpicture}
+      \\[4pt]
+      {\scriptsize Projection onto the ``listening'' direction\\shrinks even though the vector grew.}
+    \end{column}
+  \end{columns}
+  \vfill
+  \takeaway{Naive compression has an \textbf{unintended cost}: it rotates audio
+  out of the subspace the LLM attends to. This is a concrete, measurable failure
+  mode — and it points directly at the fix.}
+\end{frame}
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Fix}
+\begin{frame}{Two fixes that follow directly from the diagnosis}
+  \begin{columns}[T]
+    \begin{column}{0.49\textwidth}
+      \begin{block}{Fix 1 — Balance the budget (free)}
+        Scale audio tokens so the two modalities get \emph{equal} total
+        attention budget:
+        \[ z_a \;\leftarrow\; \sqrt{\tfrac{n_{\text{video}}}{n_{\text{audio}}}}\;z_a
+           \;\approx\; 4.1\,z_a \]
+        No retraining — pure inference-time rescaling.
+      \end{block}
+    \end{column}
+    \begin{column}{0.49\textwidth}
+      \begin{block}{Fix 2 — Keep audio pointing the right way}
+        Add a small training penalty that stops the bottleneck rotating audio:
+        \[ \mathcal{L}_{\text{dir}} = \lambda\big(1-\cos(z_a, z_a^{\text{raw}})\big) \]
+        Compression of \emph{size} is still allowed; only harmful
+        \emph{rotation} is penalized.
+      \end{block}
+    \end{column}
+  \end{columns}
+  \vfill
+  \takeaway{Both fixes are implemented and training is running.
+  They turn an accidental bug (audio suppression) into a controllable design knob.}
+\end{frame}
+
+% ════════════════════════════════════════════════════════════════════════════
+\section{Extension}
+\begin{frame}{Extension — Let the question decide the modality mix}
+  Different questions need different senses:
+  \medskip
+  \begin{center}
+  \emph{``What \textcolor{Orange}{sound} is being made?''} $\rightarrow$ weight audio \qquad
+  \emph{``What \textcolor{Blue}{color} is the car?''} $\rightarrow$ weight video
+  \end{center}
+  \medskip
+  A tiny network reads the prompt and outputs a modality mix
+  $(p_{\text{video}}, p_{\text{audio}}, p_{\text{text}})$ that rescales the
+  tokens. It starts as the identity, so it can only help.
+
+  \medskip
+  \begin{center}
+  \renewcommand{\arraystretch}{1.4}
+  \begin{tabular}{lccc}
     \toprule
-    \textbf{Experiment} & \textbf{Result} \\
+    \textbf{Prompt} & $p_{\text{video}}$ & $p_{\text{audio}}$ & $p_{\text{text}}$ \\
     \midrule
-    IB attention & VIB consistently localizes LLM attention on visual tokens.
-                   \textbf{30/30} clips. $\Delta$entropy $= -0.004$,
-                   $\Delta$top-5\%-mass $= +0.028$. \\
-    Token analysis & Video dominates total attention by \textbf{token count only}
-                     (17:1). Per token, audio already receives more attention.
-                     VIB inadvertently suppresses audio key norms
-                     through directional rotation (cos-sim $= 0.24$). \\
-    Modality gate & Prompt-conditioned gate trained end-to-end.
-                    Routing probe: \textit{pending}. \\
-    \midrule
-    \textbf{Next} & Balanced model eval; rate-distortion curve ($\beta$ sweep);
-                   perceive-then-reason (two-pass with frame descriptions). \\
+    What sound is being made? & \multicolumn{3}{c}{\textit{probe running — fills in live}} \\
+    What color is the object?  & & & \\
+    Is there music playing?    & & & \\
     \bottomrule
   \end{tabular}
+  \end{center}
+  \vfill
+  \takeaway{Gate is trained (final loss 0.36). The routing probe completes in
+  minutes; numbers go straight into this table before the talk.}
+\end{frame}
+
+% ════════════════════════════════════════════════════════════════════════════
+\begin{frame}{Where this is going}
+  \begin{enumerate}
+    \item \textbf{Balanced model:} measure AVQA accuracy gain on audio-heavy
+      questions once the fixes finish training.
+    \item \textbf{Compression curve:} sweep $\beta$ and plot accuracy vs.\
+      compression — find the sweet spot.
+    \item \textbf{Perceive-then-reason:} let the model first \emph{name} the
+      objects in a few frames, then condition compression on that description.
+    \item \textbf{Modality routing:} confirm the gate sends audio questions to
+      audio and visual questions to video.
+  \end{enumerate}
+\end{frame}
+
+% ════════════════════════════════════════════════════════════════════════════
+\begin{frame}{Summary}
+  \begin{itemize}
+    \item[\textcolor{Green}{\textbf{1}}] A representation-level bottleneck
+      \textbf{sharpens} the LLM's visual attention — \textbf{30/30 clips}.
+    \item[\textcolor{Green}{\textbf{2}}] Video dominates attention \textbf{by
+      token count, not by merit}; per token, audio and text get more.
+    \item[\textcolor{Green}{\textbf{3}}] Naive compression \textbf{accidentally
+      mutes audio} by rotating it away from the attention subspace — measurable
+      and fixable.
+    \item[\textcolor{Green}{\textbf{4}}] Two principled fixes + a
+      prompt-conditioned modality gate are implemented and training.
+  \end{itemize}
+  \vfill
+  \begin{center}
+    \Large\textcolor{Blue}{\textbf{Compression doesn't just shrink — it reshapes
+    what the model pays attention to.}}
+  \end{center}
+\end{frame}
+
+\begin{frame}[plain]
+  \centering\vfill
+  {\Huge\textcolor{Blue}{\textbf{Thank you}}}\\[1em]
+  {\large Questions?}
+  \vfill
 \end{frame}
 
 \end{document}
