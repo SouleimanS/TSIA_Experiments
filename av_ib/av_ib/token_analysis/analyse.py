@@ -104,10 +104,9 @@ def _run_condition(model, inputs, take_idx, layers, n_heads, q_pos,
         return hook
 
     def _mk_embed(store):
-        def hook(module, inp, out):
-            # inp is a tuple; the first element is the hidden states entering layernorm
-            # which is the full inputs_embeds at LLM layer 0 entry
-            x = inp[0].detach()   # (B, L, D)
+        def hook(module, args):
+            # pre-hook: args is a tuple; first element is hidden states entering layernorm
+            x = args[0].detach()   # (B, L, D)
             store["embeds"] = x[0].float().cpu()   # (L, D)
         return hook
 
