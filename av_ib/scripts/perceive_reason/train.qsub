@@ -1,0 +1,46 @@
+#!/bin/bash
+#PBS -N perceive_train
+#PBS -P gae50891
+#PBS -q rt_HF
+#PBS -l select=1
+#PBS -l walltime=08:00:00
+#PBS -j oe
+#PBS -o perceive_train.qsub.log
+
+# Perceive-then-reason training: two-pass model with frozen perception pass
+# (video description via Qwen) and CrossModalAttention for VIB-processed tokens.
+# Only trained: cross_attn module, LoRA weights, VIB weights.
+# Walltime extended vs gate training (perception pass adds overhead per step).
+
+set -euo pipefail
+cd "$PBS_O_WORKDIR"
+mkdir -p "$PBS_O_WORKDIR/runs/perceive"
+source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
+conda activate av_ib
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+echo "=== Node: $(hostname)  Date: $(date) ==="
+nvidia-smi -L
+
+ANN_TRAIN="$HOME/SOULEIMAN_repo/datasets/AVQA/train_qa.json"
+VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVQA/videos"
+[ -f "$ANN_TRAIN" ] || { echo "ERROR: $ANN_TRAIN missing" >&2; exit 1; }
+exec > >(tee -a "$PBS_O_WORKDIR/runs/perceive/perceive_train_out.txt") 2>&1
+
+export CUDA_VISIBLE_DEVICES=0
+python -u -m av_ib.perceive_reason.train \
+    --dataset avqa \
+    --ann-path "$ANN_TRAIN" --video-root "$VIDEO_ROOT" \
+    --variant b_topk_nofusion \
+    --num-steps 2000 --lr 1e-4 \
+    --beta-v 7e-6 --beta-a 7e-6 --beta-j 0 \
+    --aux-weight 0.1 \
+    --n-perceive-frames 4 \
+    --cross-attn-heads 8 \
+    --cross-attn-dropout 0.1 \
+    --log-path runs/perceive/perceive.jsonl \
+    --ckpt-path runs/perceive/perceive_final.pt \
+    --save-every 500 --print-every 50
+
+echo "=== Done $(date) ==="
