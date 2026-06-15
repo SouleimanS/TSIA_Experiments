@@ -1,0 +1,44 @@
+#!/bin/bash
+#PBS -N gate_train
+#PBS -P gae50891
+#PBS -q rt_HF
+#PBS -l select=1
+#PBS -l walltime=06:00:00
+#PBS -j oe
+#PBS -o gate_train.qsub.log
+
+# Prompt-conditioned modality gate on top of the video+audio bottleneck.
+# The gate predicts p(video, audio, text) from the prompt and scales the
+# injected modality tokens by (M * p) before splicing. Trained end-to-end
+# through the answer NLL; the 30B backbone stays frozen.
+
+set -euo pipefail
+cd "$PBS_O_WORKDIR"
+mkdir -p "$PBS_O_WORKDIR/runs/gate"
+source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
+conda activate av_ib
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+echo "=== Node: $(hostname)  Date: $(date) ==="
+nvidia-smi -L
+
+ANN_TRAIN="$HOME/SOULEIMAN_repo/datasets/AVQA/train_qa.json"
+VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVQA/videos"
+[ -f "$ANN_TRAIN" ] || { echo "ERROR: $ANN_TRAIN missing" >&2; exit 1; }
+exec > >(tee -a "$PBS_O_WORKDIR/runs/gate/gate_train_out.txt") 2>&1
+
+export CUDA_VISIBLE_DEVICES=0
+python -u -m av_ib.modality_gate.train \
+    --dataset avqa \
+    --ann-path "$ANN_TRAIN" --video-root "$VIDEO_ROOT" \
+    --variant b_topk_nofusion \
+    --num-steps 2000 --lr 1e-4 \
+    --beta-v 7e-6 --beta-a 7e-6 --beta-j 0 \
+    --aux-weight 0.1 \
+    --gate-hidden 512 \
+    --log-path runs/gate/gate.jsonl \
+    --ckpt-path runs/gate/gate_final.pt \
+    --save-every 500 --print-every 50
+
+echo "=== Done $(date) ==="
