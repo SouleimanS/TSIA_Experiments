@@ -5,57 +5,40 @@
 #PBS -l walltime=02:00:00
 #PBS -l select=1
 #PBS -j oe
-#PBS -o logs/token_analysis.log
+#PBS -o token_analysis.qsub.log
 
-# ─── environment ─────────────────────────────────────────────────────────────
-cd "$PBS_O_WORKDIR" || cd /home/user/TSIA_Experiments/av_ib
-
+cd "$PBS_O_WORKDIR"
+source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
+conda activate av_ib
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
 export TRANSFORMERS_OFFLINE=1
-export CUDA_VISIBLE_DEVICES=0
+export HF_DATASETS_OFFLINE=1
+echo "=== Node: $(hostname)  Date: $(date) ==="
+nvidia-smi -L
 
-# ─── paths ───────────────────────────────────────────────────────────────────
 CKPT="runs/avqa/v6b_base_final.pt"
+[ -f "$CKPT" ] || { echo "ERROR: $CKPT missing" >&2; exit 1; }
+
+AVH_VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVHBench/data/AVHBench_v0/video"
+AVQA_VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVQA/videos"
 OUT_DIR="results/token_analysis"
-AVH_VIDEO_ROOT="${AVH_VIDEO_ROOT:-/data/avhbench/videos}"
-AVQA_VIDEO_ROOT="${AVQA_VIDEO_ROOT:-/data/avqa/videos}"
-N_EACH=5   # take 5 from each dataset = 10 total
+mkdir -p "$OUT_DIR"
 
-mkdir -p "$OUT_DIR" logs
+mapfile -t AVH_CLIPS  < <(find "$AVH_VIDEO_ROOT"  -name "*.mp4" | sort | head -5)
+mapfile -t AVQA_CLIPS < <(find "$AVQA_VIDEO_ROOT" -name "*.mp4" | sort | head -5)
 
-# ─── collect video paths ─────────────────────────────────────────────────────
-# Take first N_EACH clips from each root (sorted)
-AVH_CLIPS=$(find "$AVH_VIDEO_ROOT" -maxdepth 1 -name "*.mp4" | sort | head -n "$N_EACH")
-AVQA_CLIPS=$(find "$AVQA_VIDEO_ROOT" -maxdepth 1 -name "*.mp4" | sort | head -n "$N_EACH")
+VIDEO_ARGS=()
+for f in "${AVH_CLIPS[@]}";  do VIDEO_ARGS+=(--video "$f"); done
+for f in "${AVQA_CLIPS[@]}"; do VIDEO_ARGS+=(--video "$f"); done
 
-# Build --video args and --dataset tags
-VIDEO_ARGS=""
-DATASET_ARGS=""
+echo "Clips: ${#VIDEO_ARGS[@]} --video args"
 
-for f in $AVH_CLIPS; do
-    stem=$(basename "$f" .mp4)
-    VIDEO_ARGS="$VIDEO_ARGS --video $f"
-    DATASET_ARGS="$DATASET_ARGS --dataset $stem AVHBench"
-done
-
-for f in $AVQA_CLIPS; do
-    stem=$(basename "$f" .mp4)
-    VIDEO_ARGS="$VIDEO_ARGS --video $f"
-    DATASET_ARGS="$DATASET_ARGS --dataset $stem AVQA"
-done
-
-# ─── run ─────────────────────────────────────────────────────────────────────
-echo "Starting token_analysis at $(date)" >&2
-echo "AVH clips:  $AVH_CLIPS" >&2
-echo "AVQA clips: $AVQA_CLIPS" >&2
-
-python -m av_ib.token_analysis.analyse \
-    $VIDEO_ARGS \
-    $DATASET_ARGS \
+export CUDA_VISIBLE_DEVICES=0
+python -u -m av_ib.token_analysis.analyse \
+    "${VIDEO_ARGS[@]}" \
     --ckpt-path "$CKPT" \
     --variant b_topk_nofusion \
     --out-dir "$OUT_DIR" \
     --last-n-layers 8
 
-EXIT_CODE=$?
-echo "Finished at $(date) with exit code $EXIT_CODE" >&2
-exit $EXIT_CODE
+echo "=== Done $(date) ==="
