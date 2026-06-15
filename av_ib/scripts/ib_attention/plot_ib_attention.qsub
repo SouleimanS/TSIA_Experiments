@@ -1,0 +1,59 @@
+#!/bin/bash
+#PBS -N ib_attention
+#PBS -P gae50891
+#PBS -q rt_HF
+#PBS -l select=1
+#PBS -l walltime=01:00:00
+#PBS -j oe
+#PBS -o ib_attention.qsub.log
+#PBS -k oe
+
+# Attention maps WITH vs WITHOUT the information bottleneck, from the same
+# trained checkpoint. Replicates the spirit of MBT (NeurIPS 2021) Fig. 6 and
+# reports localization metrics (norm-entropy, top-5%-mass) per clip.
+
+set -o pipefail
+export PYTHONUNBUFFERED=1
+cd "$PBS_O_WORKDIR"
+LIVELOG="$PBS_O_WORKDIR/ib_attention.live.log"
+exec > >(tee -a "$LIVELOG") 2>&1
+echo "Live log: $LIVELOG"
+source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
+conda activate av_ib
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+echo "=== Node: $(hostname)  Date: $(date) ==="
+nvidia-smi -L
+
+AVH_VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVHBench/data/AVHBench_v0/video"
+AVQA_VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVQA/videos"
+CKPT="runs/avqa/v6b_base_final.pt"
+[ -f "$CKPT" ] || { echo "ERROR: $CKPT missing" >&2; exit 1; }
+
+TMPOUT=$(mktemp -d)
+trap 'rm -rf "$TMPOUT"' EXIT
+FINAL_DIR="$PBS_O_WORKDIR/results/ib_attention"
+mkdir -p "$FINAL_DIR"
+
+run_one() {
+    local video="$1"
+    echo ">>> $(basename $video)"
+    python -u -m av_ib.ib_attention.plot_ib_attention \
+        --video "$video" \
+        --ckpt-path "$CKPT" \
+        --variant b_topk_nofusion \
+        --n-frames 6 \
+        --last-n-layers 8 \
+        --out-dir "$TMPOUT" \
+    && { echo "  OK"; cp "$TMPOUT"/*"$(basename ${video%.*})"* "$FINAL_DIR/" 2>/dev/null || true; } \
+    || echo "  FAIL"
+}
+
+mapfile -t AVH_CLIPS  < <(find "$AVH_VIDEO_ROOT"  -name "*.mp4" | sort | head -3)
+mapfile -t AVQA_CLIPS < <(find "$AVQA_VIDEO_ROOT" -name "*.mp4" | sort | head -2)
+
+for vid in "${AVH_CLIPS[@]}";  do run_one "$vid"; done
+for vid in "${AVQA_CLIPS[@]}"; do run_one "$vid"; done
+
+echo "=== Done $(date) ==="
