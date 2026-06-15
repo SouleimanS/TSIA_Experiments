@@ -24,12 +24,11 @@ AVQA_VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVQA/videos"
 OUT_DIR="results/token_analysis"
 mkdir -p "$OUT_DIR"
 
-mapfile -t AVH_CLIPS  < <(find "$AVH_VIDEO_ROOT"  -name "*.mp4" | sort | head -5)
-mapfile -t AVQA_CLIPS < <(find "$AVQA_VIDEO_ROOT" -name "*.mp4" | sort | head -5)
+# AVHBench only.
+mapfile -t AVH_CLIPS < <(find "$AVH_VIDEO_ROOT" -name "*.mp4" | sort | head -10)
 
 VIDEO_ARGS=()
-for f in "${AVH_CLIPS[@]}";  do VIDEO_ARGS+=(--video "$f"); done
-for f in "${AVQA_CLIPS[@]}"; do VIDEO_ARGS+=(--video "$f"); done
+for f in "${AVH_CLIPS[@]}"; do VIDEO_ARGS+=(--video "$f"); done
 
 echo "Clips: ${#VIDEO_ARGS[@]} --video args"
 

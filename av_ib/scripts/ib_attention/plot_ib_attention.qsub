@@ -50,11 +50,9 @@ run_one() {
     || echo "  FAIL"
 }
 
-# Take 50 NEW clips (skip the first 15 of each already produced): clips 16..40.
-mapfile -t AVH_CLIPS  < <(find "$AVH_VIDEO_ROOT"  -name "*.mp4" | sort | sed -n '16,40p')
-mapfile -t AVQA_CLIPS < <(find "$AVQA_VIDEO_ROOT" -name "*.mp4" | sort | sed -n '16,40p')
+# AVHBench only.
+mapfile -t AVH_CLIPS < <(find "$AVH_VIDEO_ROOT" -name "*.mp4" | sort | head -30)
 
-for vid in "${AVH_CLIPS[@]}";  do run_one "$vid"; done
-for vid in "${AVQA_CLIPS[@]}"; do run_one "$vid"; done
+for vid in "${AVH_CLIPS[@]}"; do run_one "$vid"; done
 
 echo "=== Done $(date) ==="
