@@ -110,6 +110,46 @@ def _run_forward(model, inputs, take_idx, layers, n_heads,
     return sal / count
 
 
+def _run_forward_grad(model, inputs, layers, q_pos, vis_pos) -> np.ndarray:
+    """Gradient x input saliency over visual tokens.
+
+    Why this beats raw attention: attention maps are dominated by sinks and
+    positional artifacts. The GRADIENT of the answer logit w.r.t. each visual
+    token measures how much that token *causally* drives the prediction — it
+    naturally concentrates on the object regions that matter and ignores sinks.
+    This is what produces clean, MBT-style maps.
+
+    We install a pre-hook on the first decoder layer that swaps the incoming
+    embeddings for a leaf tensor, run a real (grad-enabled) forward, take the
+    model's own top answer token at q_pos, and backprop to the leaf.
+    """
+    leaf_box: dict[str, torch.Tensor] = {}
+
+    def pre_hook(module, args):
+        x = args[0].detach().requires_grad_(True)
+        leaf_box["x"] = x
+        return (x,) + args[1:]
+
+    h = layers[0].register_forward_pre_hook(pre_hook)
+    try:
+        out = model.qwen.model.thinker(**inputs, use_audio_in_video=True,
+                                       use_cache=False)
+        logits = out.logits if hasattr(out, "logits") else out[0]
+        row = logits[0, q_pos].float()
+        target = int(row.argmax().item())
+        loss = -torch.log_softmax(row, dim=-1)[target]
+        leaf = leaf_box["x"]
+        grad = torch.autograd.grad(loss, leaf, retain_graph=False)[0]  # (1, L, D)
+    finally:
+        h.remove()
+
+    # grad x input, summed over hidden dim, positive part = supporting evidence
+    sal_full = (grad[0] * leaf.detach()[0]).sum(dim=-1)          # (L,)
+    sal_full = torch.relu(sal_full)
+    sal = sal_full[vis_pos.to(sal_full.device)].float().cpu().numpy()
+    return sal
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser()
@@ -121,6 +161,9 @@ def main():
     ap.add_argument("--out-dir",       default="runs/ib_attention")
     ap.add_argument("--n-frames",      type=int, default=6)
     ap.add_argument("--last-n-layers", type=int, default=8)
+    ap.add_argument("--method",        default="grad", choices=["grad", "attention"],
+                    help="grad = gradient x input saliency (clean, causal); "
+                         "attention = raw decoder attention (noisier).")
     args = ap.parse_args()
 
     print("Loading model onto cuda:0...", flush=True)
@@ -156,6 +199,15 @@ def main():
             n_heads = D_out // hd
             break
     print(f"  {n_layers} layers, hooking {take_idx}, n_heads={n_heads}", flush=True)
+
+    if args.method == "grad":
+        # gradient saliency needs a backward pass; gradient checkpointing keeps
+        # the 30B activations within one 80 GB GPU. Frozen params store no grad.
+        try:
+            model.qwen.model.thinker.gradient_checkpointing_enable()
+            print("  gradient checkpointing enabled", flush=True)
+        except Exception as e:
+            print(f"  (grad checkpointing unavailable: {e})", flush=True)
 
     # inputs
     print(f"Preparing inputs for {Path(args.video).name}...", flush=True)
@@ -194,10 +246,13 @@ def main():
         else:
             provider, _, _, _ = model._make_provider()  # trained VIB
             model.qwen._current_provider = provider
-        print(f"Running forward [{mode}]...", flush=True)
+        print(f"Running forward [{mode}] method={args.method}...", flush=True)
         try:
-            sal = _run_forward(model, inputs, take_idx, layers, n_heads,
-                               q_pos, vis_pos)
+            if args.method == "grad":
+                sal = _run_forward_grad(model, inputs, layers, q_pos, vis_pos)
+            else:
+                sal = _run_forward(model, inputs, take_idx, layers, n_heads,
+                                   q_pos, vis_pos)
         finally:
             model.qwen._current_provider = None
         metrics = _localization_metrics(sal)
