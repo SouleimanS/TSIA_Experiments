@@ -149,10 +149,36 @@ def _run_condition(model, inputs, take_idx, layers, n_heads, q_pos,
         raise RuntimeError("No attention captured.")
     attn_full = attn_sum / count   # (L,)
 
+    # ── key norms at vis/aud positions (mean over last-N layers, all heads) ──
+    # k_store[i] shape: (B, L, D_k); reshape to (B, n_kv_heads, L, head_dim)
+    k_norm_vid_sum = 0.0
+    k_norm_aud_sum = 0.0
+    k_norm_txt_sum = 0.0
+    kn_count = 0
+    vid_cpu = vid_pos.cpu()
+    aud_cpu = aud_pos.cpu()
+    L_seq = embeds.shape[0]
+    txt_mask = torch.ones(L_seq, dtype=torch.bool)
+    txt_mask[vid_cpu] = False
+    txt_mask[aud_cpu] = False
+    for i in take_idx:
+        if i in k_store:
+            k = k_store[i][0].float()   # (L, D_k)
+            k_norm_vid_sum += float(k[vid_cpu].norm(dim=-1).mean())
+            k_norm_aud_sum += float(k[aud_cpu].norm(dim=-1).mean())
+            k_norm_txt_sum += float(k[txt_mask].norm(dim=-1).mean())
+            kn_count += 1
+    k_norm_vid = k_norm_vid_sum / max(kn_count, 1)
+    k_norm_aud = k_norm_aud_sum / max(kn_count, 1)
+    k_norm_txt = k_norm_txt_sum / max(kn_count, 1)
+
     return {
         "vid_embeds": vid_embeds,
         "aud_embeds": aud_embeds,
         "attn_full": attn_full,
+        "k_norm_vid": k_norm_vid,
+        "k_norm_aud": k_norm_aud,
+        "k_norm_txt": k_norm_txt,
     }
 
 
@@ -252,6 +278,18 @@ def _analyse_clip(model, video_path: str, question: str,
     av_raw, aa_raw, at_raw = _attn_fracs(results["raw"]["attn_full"], vid_pos, aud_pos, L)
     av_vib, aa_vib, at_vib = _attn_fracs(results["vib"]["attn_full"], vid_pos, aud_pos, L)
 
+    # Per-token attention: mass / n_tokens — removes token-count effect
+    n_txt = max(1, L - n_video - n_audio)
+    pt_vid_raw = av_raw / max(n_video, 1)
+    pt_aud_raw = aa_raw / max(n_audio, 1)
+    pt_txt_raw = at_raw / max(n_txt, 1)
+    pt_vid_vib = av_vib / max(n_video, 1)
+    pt_aud_vib = aa_vib / max(n_audio, 1)
+    pt_txt_vib = at_vib / max(n_txt, 1)
+
+    # Uniform baseline: 1/L per token regardless of modality
+    uniform = 1.0 / max(L, 1)
+
     metrics = {
         "vid_norm_raw": vid_norm_raw,
         "vid_norm_vib": vid_norm_vib,
@@ -265,10 +303,31 @@ def _analyse_clip(model, video_path: str, question: str,
         "attn_audio_vib": aa_vib,
         "attn_text_raw":  at_raw,
         "attn_text_vib":  at_vib,
+        # per-token attention (normalized by count)
+        "pt_vid_raw": pt_vid_raw,
+        "pt_aud_raw": pt_aud_raw,
+        "pt_txt_raw": pt_txt_raw,
+        "pt_vid_vib": pt_vid_vib,
+        "pt_aud_vib": pt_aud_vib,
+        "pt_txt_vib": pt_txt_vib,
+        "uniform_per_token": uniform,
+        # key norms: which modality has larger keys (attracts more softmax mass)
+        "k_norm_vid_raw": results["raw"]["k_norm_vid"],
+        "k_norm_aud_raw": results["raw"]["k_norm_aud"],
+        "k_norm_txt_raw": results["raw"]["k_norm_txt"],
+        "k_norm_vid_vib": results["vib"]["k_norm_vid"],
+        "k_norm_aud_vib": results["vib"]["k_norm_aud"],
+        "k_norm_txt_vib": results["vib"]["k_norm_txt"],
         "n_video": n_video,
         "n_audio": n_audio,
+        "n_text": n_txt,
+        "n_total": L,
         "video": stem,
     }
+
+    print(f"  [{stem}] per-token attn  raw: vid={pt_vid_raw*1e4:.2f}e-4  aud={pt_aud_raw*1e4:.2f}e-4  txt={pt_txt_raw*1e4:.2f}e-4  (uniform={uniform*1e4:.2f}e-4)", flush=True)
+    print(f"  [{stem}] key norms  raw: vid={results['raw']['k_norm_vid']:.3f}  aud={results['raw']['k_norm_aud']:.3f}  txt={results['raw']['k_norm_txt']:.3f}", flush=True)
+    print(f"  [{stem}] key norms  vib: vid={results['vib']['k_norm_vid']:.3f}  aud={results['vib']['k_norm_aud']:.3f}  txt={results['vib']['k_norm_txt']:.3f}", flush=True)
 
     # ── per-clip JSON ─────────────────────────────────────────────────────────
     (out_dir / f"{stem}_token_analysis.json").write_text(json.dumps(metrics, indent=2))
