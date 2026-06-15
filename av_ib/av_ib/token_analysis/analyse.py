@@ -364,68 +364,83 @@ def _build_attn_heatmap(attn_full: np.ndarray, take_idx: list[int], q_store, k_s
 def _plot_clip(stem: str, results: dict, metrics: dict,
                vid_pos: torch.Tensor, aud_pos: torch.Tensor,
                L: int, n_heads: int, take_idx: list[int], out_dir: Path):
-    """2-row figure: row1=attention heatmaps, row2=bar chart."""
-    # We stored attn_full per condition, but for the heatmap we need per-layer rows.
-    # Use the scalar attn_full we already have as a proxy for a flat heatmap,
-    # then add a per-modality bar chart below it.
-
+    """Clean 4-panel figure:
+       top (wide): attention vs token index, raw vs VIB, modality regions shaded
+       bottom-left:   attention PER TOKEN (count-normalized) by modality
+       bottom-mid:    total attention share by modality
+       bottom-right:  key norms by modality (the mechanism)
+    """
     attn_raw = results["raw"]["attn_full"]   # (L,)
     attn_vib = results["vib"]["attn_full"]   # (L,)
-
-    fig, axes = plt.subplots(2, 2, figsize=(14, 7))
-    fig.suptitle(f"{stem} — token analysis (raw vs VIB)", fontsize=12)
-
     vp = vid_pos.cpu().numpy()
     ap = aud_pos.cpu().numpy()
 
-    for col, (label, attn) in enumerate([("Raw", attn_raw), ("VIB", attn_vib)]):
-        ax = axes[0, col]
-        # Show as 1-row heatmap (or reshape to show per-layer if available)
-        hm = attn[np.newaxis, :]   # (1, L)
-        im = ax.imshow(hm, aspect="auto", cmap="hot", interpolation="nearest")
-        # Mark video and audio regions
-        if len(vp) > 0:
-            ax.axvline(vp[0], color="cyan", linewidth=1.2, linestyle="--", label="vid start")
-            ax.axvline(vp[-1], color="cyan", linewidth=1.2, linestyle="-", label="vid end")
-        if len(ap) > 0:
-            ax.axvline(ap[0], color="lime", linewidth=1.2, linestyle="--", label="aud start")
-            ax.axvline(ap[-1], color="lime", linewidth=1.2, linestyle="-", label="aud end")
-        ax.set_title(f"Attention over full sequence [{label}]", fontsize=10)
-        ax.set_xlabel("Token index")
-        ax.set_ylabel("Mean attn (1 row = mean over last-N layers)")
-        ax.legend(fontsize=7, loc="upper right")
-        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig = plt.figure(figsize=(15, 8.5))
+    gs = fig.add_gridspec(2, 3, height_ratios=[1.0, 1.15], hspace=0.35, wspace=0.3)
+    RAW_C, VIB_C = "#1f77b4", "#e67814"
 
-    # Row 2: grouped bar chart per modality
-    ax = axes[1, 0]
-    modalities = ["Video", "Audio", "Text"]
-    raw_vals = [metrics["attn_video_raw"], metrics["attn_audio_raw"], metrics["attn_text_raw"]]
-    vib_vals = [metrics["attn_video_vib"], metrics["attn_audio_vib"], metrics["attn_text_vib"]]
-    x = np.arange(len(modalities))
-    w = 0.35
-    ax.bar(x - w/2, raw_vals, w, label="raw", color="steelblue")
-    ax.bar(x + w/2, vib_vals, w, label="VIB", color="darkorange")
-    ax.set_xticks(x)
-    ax.set_xticklabels(modalities)
-    ax.set_ylabel("Fraction of total attention")
-    ax.set_title("Attention by modality", fontsize=10)
-    ax.legend()
+    # ── top: attention across the sequence ────────────────────────────────────
+    ax = fig.add_subplot(gs[0, :])
+    tok = np.arange(L)
+    ax.plot(tok, attn_raw, color=RAW_C, lw=0.6, alpha=0.8, label="raw")
+    ax.plot(tok, attn_vib, color=VIB_C, lw=0.6, alpha=0.8, label="VIB")
+    if len(vp) > 0:
+        ax.axvspan(vp[0], vp[-1], color="#1f77b4", alpha=0.07)
+        ax.text((vp[0]+vp[-1])/2, ax.get_ylim()[1]*0.92, "VIDEO",
+                ha="center", fontsize=9, color="#1f77b4", weight="bold")
+    if len(ap) > 0:
+        ax.axvspan(ap[0], ap[-1], color="#2ca02c", alpha=0.10)
+        ax.text((ap[0]+ap[-1])/2, ax.get_ylim()[1]*0.92, "AUDIO",
+                ha="center", fontsize=9, color="#2ca02c", weight="bold")
+    ax.set_xlabel("Token index"); ax.set_ylabel("Attention from answer token")
+    ax.set_title("Where attention lands across the input sequence", fontsize=12, weight="bold")
+    ax.legend(loc="upper right", fontsize=9)
+    ax.margins(x=0)
 
-    # Norm and cosine summary
-    ax = axes[1, 1]
-    ax.axis("off")
-    txt = (
-        f"Video norm:  raw={metrics['vid_norm_raw']:.3f}  vib={metrics['vid_norm_vib']:.3f}  "
-        f"ratio={metrics['vid_norm_vib'] / (metrics['vid_norm_raw'] + 1e-9):.3f}\n"
-        f"Audio norm:  raw={metrics['aud_norm_raw']:.3f}  vib={metrics['aud_norm_vib']:.3f}  "
-        f"ratio={metrics['aud_norm_vib'] / (metrics['aud_norm_raw'] + 1e-9):.3f}\n"
-        f"Video cosine sim: {metrics['vid_cos_sim']:.4f}\n"
-        f"Audio cosine sim: {metrics['aud_cos_sim']:.4f}\n"
-        f"n_video={metrics['n_video']}, n_audio={metrics['n_audio']}"
-    )
-    ax.text(0.05, 0.5, txt, transform=ax.transAxes, fontsize=10,
-            verticalalignment="center", fontfamily="monospace",
-            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.4))
+    mods = ["Video", "Audio", "Text"]
+    x = np.arange(3); w = 0.38
+
+    # ── bottom-left: per-token attention (the headline) ───────────────────────
+    ax1 = fig.add_subplot(gs[1, 0])
+    pt_raw = [metrics["pt_vid_raw"], metrics["pt_aud_raw"], metrics["pt_txt_raw"]]
+    pt_vib = [metrics["pt_vid_vib"], metrics["pt_aud_vib"], metrics["pt_txt_vib"]]
+    ax1.bar(x - w/2, np.array(pt_raw)*1e4, w, label="raw", color=RAW_C)
+    ax1.bar(x + w/2, np.array(pt_vib)*1e4, w, label="VIB", color=VIB_C)
+    ax1.axhline(metrics["uniform_per_token"]*1e4, color="gray", ls="--", lw=1,
+                label="uniform")
+    ax1.set_xticks(x); ax1.set_xticklabels(mods)
+    ax1.set_ylabel(r"Attention per token ($\times10^{-4}$)")
+    ax1.set_title("Attention PER TOKEN\n(count-normalized)", fontsize=11, weight="bold")
+    ax1.legend(fontsize=8)
+
+    # ── bottom-mid: total attention share ─────────────────────────────────────
+    ax2 = fig.add_subplot(gs[1, 1])
+    tot_raw = [metrics["attn_video_raw"], metrics["attn_audio_raw"], metrics["attn_text_raw"]]
+    tot_vib = [metrics["attn_video_vib"], metrics["attn_audio_vib"], metrics["attn_text_vib"]]
+    ax2.bar(x - w/2, tot_raw, w, label="raw", color=RAW_C)
+    ax2.bar(x + w/2, tot_vib, w, label="VIB", color=VIB_C)
+    ax2.set_xticks(x); ax2.set_xticklabels(mods)
+    ax2.set_ylabel("Fraction of total attention")
+    ax2.set_title(f"Total attention share\n(n_vid={metrics['n_video']}, n_aud={metrics['n_audio']})",
+                  fontsize=11, weight="bold")
+    ax2.legend(fontsize=8)
+
+    # ── bottom-right: key norms (mechanism) ───────────────────────────────────
+    ax3 = fig.add_subplot(gs[1, 2])
+    kn_raw = [metrics["k_norm_vid_raw"], metrics["k_norm_aud_raw"], metrics["k_norm_txt_raw"]]
+    kn_vib = [metrics["k_norm_vid_vib"], metrics["k_norm_aud_vib"], metrics["k_norm_txt_vib"]]
+    ax3.bar(x - w/2, kn_raw, w, label="raw", color=RAW_C)
+    ax3.bar(x + w/2, kn_vib, w, label="VIB", color=VIB_C)
+    ax3.set_xticks(x); ax3.set_xticklabels(mods)
+    ax3.set_ylabel("Mean key norm")
+    ax3.set_title("Key norms\n(bigger key = more attention)", fontsize=11, weight="bold")
+    ax3.legend(fontsize=8)
+
+    fig.suptitle(
+        f"{stem}   |   audio cos-sim={metrics['aud_cos_sim']:.2f} "
+        f"(VIB rotates audio)   |   audio key {metrics['k_norm_aud_raw']:.1f}"
+        f"→{metrics['k_norm_aud_vib']:.1f}",
+        fontsize=13, weight="bold", y=0.99)
 
     plt.tight_layout()
     fname = out_dir / f"{stem}_token_analysis.png"
