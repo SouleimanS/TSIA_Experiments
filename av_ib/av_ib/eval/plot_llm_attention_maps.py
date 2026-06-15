@@ -50,23 +50,51 @@ def _extract_frames(video_path: str, n_frames: int) -> list[np.ndarray]:
     return frames
 
 
-def _to_heatmap(grid: np.ndarray, frame: np.ndarray, alpha: float = 0.55) -> np.ndarray:
+def _to_heatmap(grid: np.ndarray, frame: np.ndarray, alpha: float = 0.55,
+                p_lo: float = 40.0, p_hi: float = 99.0,
+                blur_frac: float = 0.05) -> np.ndarray:
+    """Clean MBT-style overlay.
+
+    Three steps that make LLM attention readable:
+      1. Percentile normalization (clip to [p_lo, p_hi]) so a single attention
+         sink can no longer saturate the whole colormap.
+      2. Cubic upsample to frame resolution.
+      3. Gaussian blur (kernel ~ blur_frac of the short side) for smooth blobs
+         instead of blocky per-token squares.
+    """
     import cv2
-    grid = (grid - grid.min()) / (grid.max() - grid.min() + 1e-8)
+    g = grid.astype(np.float32)
+    lo = float(np.percentile(g, p_lo))
+    hi = float(np.percentile(g, p_hi))
+    g = np.clip((g - lo) / (hi - lo + 1e-8), 0.0, 1.0)
+
     H, W = frame.shape[:2]
-    heat = cv2.resize(grid.astype(np.float32), (W, H), interpolation=cv2.INTER_LINEAR)
+    heat = cv2.resize(g, (W, H), interpolation=cv2.INTER_CUBIC)
+    ksz = int(max(3, (min(H, W) * blur_frac)))
+    ksz = ksz + 1 if ksz % 2 == 0 else ksz          # force odd kernel
+    heat = cv2.GaussianBlur(heat, (ksz, ksz), 0)
+    heat = np.clip(heat, 0.0, 1.0)
+
     colormap = cv2.applyColorMap((heat * 255).astype(np.uint8), cv2.COLORMAP_JET)
     colormap = cv2.cvtColor(colormap, cv2.COLOR_BGR2RGB)
     return (alpha * colormap + (1 - alpha) * frame).astype(np.uint8)
 
 
 def _attn_row(q: torch.Tensor, k: torch.Tensor,
-              q_pos: int, vis_pos: torch.Tensor, n_heads: int) -> np.ndarray:
+              q_pos: int, vis_pos: torch.Tensor, n_heads: int,
+              top_frac_heads: float = 0.25) -> np.ndarray:
     """Compute attention weights for token q_pos over vis_pos tokens.
 
     q: (1, L, n_heads*head_dim) or (L, n_heads*head_dim)
     k: (1, L, n_kv_heads*head_dim) — GQA: n_kv_heads may differ from n_heads.
-    Returns (n_vis,) float32 numpy saliency (mean over query heads).
+
+    head selection: most attention heads are diffuse / sink-dominated. Averaging
+    all of them buries the few heads that actually localize on objects. We keep
+    only the `top_frac_heads` fraction of heads with the LOWEST entropy over the
+    visual tokens (the most peaked, object-focused heads) and average those.
+    Set top_frac_heads=1.0 to recover the plain mean-over-all-heads behaviour.
+
+    Returns (n_vis,) float32 numpy saliency.
     """
     if q.dim() == 2:
         q = q.unsqueeze(0)
@@ -86,6 +114,15 @@ def _attn_row(q: torch.Tensor, k: torch.Tensor,
     scores = (q[:, :, q_pos:q_pos+1, :] @ k.transpose(-2, -1)).squeeze(-2) * scale
     attn = F.softmax(scores.float(), dim=-1)   # (B, H, L)
     vis_attn = attn[0, :, vis_pos.to(attn.device)]   # (H, n_vis)
+
+    if 0.0 < top_frac_heads < 1.0 and vis_attn.shape[0] > 1:
+        # entropy of each head over the visual tokens; keep the most peaked
+        p = vis_attn / (vis_attn.sum(dim=1, keepdim=True) + 1e-9)
+        ent = -(p * (p + 1e-12).log()).sum(dim=1)        # (H,)
+        k_keep = max(1, int(round(top_frac_heads * vis_attn.shape[0])))
+        keep = torch.topk(-ent, k_keep).indices          # lowest-entropy heads
+        vis_attn = vis_attn[keep]
+
     return vis_attn.mean(dim=0).cpu().numpy()
 
 
