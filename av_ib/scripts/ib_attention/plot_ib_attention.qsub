@@ -28,7 +28,7 @@ nvidia-smi -L
 
 AVH_VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVHBench/data/AVHBench_v0/video"
 AVQA_VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVQA/videos"
-CKPT="runs/avqa/v6b_base_final.pt"
+CKPT="runs/avqa/video_bottleneck_sft_final.pt"
 [ -f "$CKPT" ] || { echo "ERROR: $CKPT missing" >&2; exit 1; }
 
 TMPOUT=$(mktemp -d)
@@ -42,7 +42,7 @@ run_one() {
     python -u -m av_ib.ib_attention.plot_ib_attention \
         --video "$video" \
         --ckpt-path "$CKPT" \
-        --variant b_topk_nofusion \
+        --variant b_video_only \
         --n-frames 6 \
         --last-n-layers 8 \
         --out-dir "$TMPOUT" \

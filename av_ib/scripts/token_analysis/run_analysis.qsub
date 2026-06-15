@@ -16,7 +16,7 @@ export HF_DATASETS_OFFLINE=1
 echo "=== Node: $(hostname)  Date: $(date) ==="
 nvidia-smi -L
 
-CKPT="runs/avqa/v6b_base_final.pt"
+CKPT="runs/avqa/video_bottleneck_sft_final.pt"
 [ -f "$CKPT" ] || { echo "ERROR: $CKPT missing" >&2; exit 1; }
 
 AVH_VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVHBench/data/AVHBench_v0/video"
@@ -37,7 +37,7 @@ export CUDA_VISIBLE_DEVICES=0
 python -u -m av_ib.token_analysis.analyse \
     "${VIDEO_ARGS[@]}" \
     --ckpt-path "$CKPT" \
-    --variant b_topk_nofusion \
+    --variant b_video_only \
     --out-dir "$OUT_DIR" \
     --last-n-layers 8
 
