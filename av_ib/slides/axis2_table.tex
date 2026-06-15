@@ -1,0 +1,12 @@
+\begin{tabular}{lccc}
+\toprule
+(mean over 10 clips) & Video & Audio & Text \\
+\midrule
+share of total attention & 86\% & 6\% & 8\% \\
+number of tokens & 1440--5760 & $\sim$130 & $\sim$68 \\
+\rowcolor{Soft} attention \emph{per token} ($\times10^{-4}$) & 3.50 & \textbf{4.85} & \textbf{11.83} \\
+\midrule
+audio cosine sim (raw vs VIB) & \multicolumn{3}{c}{0.24 \;(video: 0.50)} \\
+audio key norm raw $\to$ VIB & \multicolumn{3}{c}{12.7 $\to$ 11.3} \\
+\bottomrule
+\end{tabular}
