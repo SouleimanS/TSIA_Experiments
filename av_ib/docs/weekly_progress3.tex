@@ -1,0 +1,481 @@
+% Compile with: pdflatex weekly_progress3.tex (run twice)
+
+\documentclass[10pt,aspectratio=169]{beamer}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath, amssymb}
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage[table]{xcolor}
+\usepackage{array}
+\usepackage{graphicx}
+
+\usetikzlibrary{positioning, shapes.geometric, arrows.meta, backgrounds, fit, calc}
+
+\usetheme{Madrid}
+\usecolortheme{seahorse}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{caption}[numbered]
+\setbeamerfont{frametitle}{size=\large}
+\setbeamerfont{title}{size=\Large}
+
+\definecolor{paperA}{RGB}{200,80,80}
+\definecolor{paperB}{RGB}{60,100,180}
+\definecolor{paperC}{RGB}{130,60,180}
+\definecolor{paperD}{RGB}{50,140,80}
+\definecolor{boxbg}{RGB}{240,240,250}
+\definecolor{frozenbg}{RGB}{220,220,220}
+\definecolor{trainedbg}{RGB}{255,235,205}
+\colorlet{accent}{paperB}
+
+\tikzstyle{block}  = [rectangle, draw, rounded corners, align=center,
+                      minimum height=0.8cm, minimum width=2.2cm, fill=boxbg]
+\tikzstyle{frozen} = [block, fill=frozenbg]
+\tikzstyle{trained}= [block, fill=trainedbg]
+\tikzstyle{arrow}  = [-{Stealth[length=2mm]}, thick]
+
+\title[av\_ib Weekly Progress]{Audio-Visual Information Bottleneck\\
+       \normalfont\normalsize Weekly Progress --- SFT Collapsed, DPO Learned Coverage,\\
+       and the Bottleneck Focuses Attention}
+\subtitle{}
+\author{}
+\institute{}
+\date{\today}
+
+\begin{document}
+
+\frame{\titlepage}
+
+% =====================================================================
+\section{This week}
+
+\begin{frame}{What I did this week}
+
+\begin{block}{SFT vs DPO risk--coverage experiment: results in}
+  SFT over-abstained catastrophically (coverage\,=\,0 on \emph{every} condition,
+  including clean). DPO learned the right selective-abstention pattern: nearly full
+  coverage on clean and audio-only corruptions, near-zero coverage on trained
+  video corruptions (\texttt{vid\_zero}, \texttt{vid\_mean}).
+\end{block}
+
+\begin{block}{DPO generalises partially to held-out corruptions}
+  \texttt{vid\_scale} (unseen at training): coverage drops to 0.7--10.7\,\% ---
+  good generalisation. \texttt{vid\_noise}: coverage stays high (94\,\%) ---
+  the model cannot recognise white-noise corruption as ``missing evidence.''
+  Negative control (audio zeroed): coverage stays at 99\,\% as intended.
+\end{block}
+
+\begin{block}{Attention analysis (Axis 2): where the model actually looks}
+  Gradient $\times$ input saliency across 10 AVHBench clips. Video dominates by
+  token count (17:1), not by per-token weight. The VIB concentrates attention
+  on the sound source: entropy $0.78\!\to\!0.69$, top-5\% mass $0.53\!\to\!0.74$.
+\end{block}
+
+\end{frame}
+
+% =====================================================================
+\section{SFT vs DPO}
+
+\begin{frame}{SFT collapsed; DPO learned selective abstention}
+
+\begin{columns}[T]
+\begin{column}{0.50\textwidth}
+
+\begin{block}{Coverage per corruption (150 AVQA val samples)}
+{\footnotesize
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{l r r r}
+\toprule
+\textbf{Condition} & \textbf{SFT} & \textbf{DPO (vid)} & \textbf{DPO (av)} \\
+\midrule
+\texttt{identity} (clean) & 0.0\,\% & \textbf{99.3\,\%} & 99.3\,\% \\
+\midrule
+\multicolumn{4}{l}{\textit{Trained corruptions (video)}} \\
+\texttt{vid\_zero}  & 0.0\,\% & \textbf{0.0\,\%}  & 0.0\,\% \\
+\texttt{vid\_mean}  & 0.0\,\% & \textbf{0.0\,\%}  & 0.0\,\% \\
+\midrule
+\multicolumn{4}{l}{\textit{Held-out corruptions}} \\
+\rowcolor{paperD!12}
+\texttt{vid\_scale} & 0.0\,\% & \textbf{0.7\,\%}  & 10.7\,\% \\
+\rowcolor{paperA!8}
+\texttt{vid\_noise} & 0.0\,\% & 94.0\,\%  & 94.7\,\% \\
+\midrule
+\multicolumn{4}{l}{\textit{Negative control (audio)}} \\
+\texttt{aud\_zero}  & 0.0\,\% & \textbf{99.3\,\%}  & 99.3\,\% \\
+\texttt{aud\_mean}  & 0.0\,\% & \textbf{99.3\,\%}  & 99.3\,\% \\
+\bottomrule
+\end{tabular}}
+\end{block}
+
+\end{column}
+
+\begin{column}{0.47\textwidth}
+
+\begin{block}{Reading the table}
+{\footnotesize
+\begin{itemize}\setlength\itemsep{3pt}
+  \item \textbf{SFT}: completely collapsed. After maximising NLL of
+        ``I can't tell,'' the model \emph{only} says that --- on
+        clean clips too. No coverage anywhere.
+  \item \textbf{DPO}: the KL leash to $\pi_\text{ref}$ prevented
+        collapse. Clean coverage stays at 99.3\,\%; trained
+        corruptions drop to 0\,\% --- perfect on those.
+  \item \textbf{Held-out generalisation}: \texttt{vid\_scale}
+        transfers well (near-zero coverage). \texttt{vid\_noise}
+        does not --- model sees noise as signal.
+  \item \textbf{Negative control}: coverage is preserved when only
+        the inert (audio) modality is corrupted --- the model
+        correctly does not abstain.
+\end{itemize}}
+\end{block}
+
+\begin{alertblock}{Why SFT fails here}
+{\footnotesize
+$\mathcal L_\text{SFT}$ has no leash: if the loss is minimised by
+always predicting ``cant,'' it will. DPO's margin loss
+\emph{requires} the model to prefer the correct response on positive
+examples, preventing this collapse.}
+\end{alertblock}
+
+\end{column}
+\end{columns}
+
+\end{frame}
+
+% =====================================================================
+\begin{frame}{DPO coverage pattern --- visualised}
+
+\begin{columns}[T]
+
+% bar chart of coverage
+\begin{column}{0.50\textwidth}
+\centering
+{\scriptsize\textbf{Coverage per condition (DPO video-bottleneck model)}}\\[4pt]
+\begin{tikzpicture}[font=\tiny, >=stealth]
+% 7 bars, coverage 0..1, box 4cm wide x 3.2cm tall
+\def\ys{3.2}  % height for coverage=1.0
+% bar positions at x=0.3,0.9,1.5,...  width=0.4
+\def\bw{0.34}
+% (xcenter, coverage, label, color)
+\foreach \xc/\cv/\lbl/\clr in {
+  0.35/0.993/identity/paperD,
+  0.90/0.000/vid\_zero/paperA,
+  1.45/0.000/vid\_mean/paperA,
+  2.00/0.940/vid\_noise/paperC,
+  2.55/0.007/vid\_scale/paperD,
+  3.10/0.993/aud\_zero/paperB,
+  3.65/0.993/aud\_mean/paperB}{
+  \pgfmathsetmacro{\ht}{\cv*\ys}
+  \pgfmathsetmacro{\xlo}{\xc-\bw/2}
+  \pgfmathsetmacro{\xhi}{\xc+\bw/2}
+  \fill[\clr!50,draw=\clr] (\xlo,0) rectangle (\xhi,\ht);
+  \pgfmathsetmacro{\pct}{int(\cv*100+0.5)}
+  \node[above,font=\tiny] at (\xc,\ht) {\pct\,\%};
+  \node[below,rotate=45,anchor=north east,font=\tiny] at (\xc,-0.05) {\lbl};
+}
+\draw[->] (0,0)--(4.1,0);
+\draw[->] (0,0)--(0,3.5) node[above] {coverage};
+\foreach \yv/\yl in {0.0/0,0.5/50,1.0/100}{
+  \pgfmathsetmacro{\yp}{\yv*\ys}
+  \draw (0,\yp)--(-0.08,\yp) node[left] {\yl\,\%};
+}
+% legend
+\node[paperD, fill=paperD!50, draw=paperD, minimum width=4mm, minimum height=3mm] at (3.5,3.0) {};
+\node[right, font=\tiny] at (3.55,3.0) {answer};
+\node[paperA, fill=paperA!50, draw=paperA, minimum width=4mm, minimum height=3mm] at (3.5,2.6) {};
+\node[right, font=\tiny] at (3.55,2.6) {abstain};
+\end{tikzpicture}\\[2pt]
+{\tiny Green/blue = correctly answers. Red = correctly abstains. Purple = wrongly stays active.}
+\end{column}
+
+\begin{column}{0.47\textwidth}
+
+\begin{block}{What the corruption taxonomy tests}
+{\footnotesize
+\begin{tabular}{l p{3.4cm}}
+\toprule
+\textbf{Condition} & \textbf{Meaning} \\
+\midrule
+\texttt{identity} & no corruption; model must answer \\
+\rowcolor{paperD!12}
+\texttt{vid\_zero} & video zeroed (seen in train) \\
+\rowcolor{paperD!12}
+\texttt{vid\_mean} & video replaced by mean (seen) \\
+\rowcolor{paperC!10}
+\texttt{vid\_noise} & white noise (held-out) \\
+\rowcolor{paperC!10}
+\texttt{vid\_scale} & video scaled $\to 0$ (held-out) \\
+\rowcolor{paperB!8}
+\texttt{aud\_zero} & audio zeroed (neg.\ control) \\
+\rowcolor{paperB!8}
+\texttt{aud\_mean} & audio mean (neg.\ control) \\
+\bottomrule
+\end{tabular}}
+\end{block}
+
+\begin{block}{The generalisation gap}
+{\footnotesize
+DPO generalises well to \texttt{vid\_scale} (which smoothly
+fades signal to zero) because the model learns ``low-signal $=$ uncertain.''
+\texttt{vid\_noise} adds energy in a different regime, and the model
+has not learned to recognise high-entropy noise as evidence absence.}
+\end{block}
+
+\end{column}
+\end{columns}
+
+\end{frame}
+
+% =====================================================================
+\section{Attention analysis}
+
+\begin{frame}{Where does the model put its attention? (Axis 2)}
+
+\begin{columns}[T]
+\begin{column}{0.55\textwidth}
+
+\begin{block}{Gradient $\times$ input saliency (10 AVHBench clips)}
+{\footnotesize
+We hook the first decoder layer and backpropagate through $-\log p(\hat y)$:
+\[ s_i = \mathrm{ReLU}\!\Big(\nabla_{x_i}\log p(\hat y)\cdot x_i\Big) \]
+This gives a clean, causal signal immune to attention sinks.}
+\end{block}
+
+\begin{block}{Per-modality attention share}
+{\footnotesize
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{l r r r}
+\toprule
+\textbf{Modality} & \textbf{Tokens} & \textbf{Total sal.} & \textbf{Per token} \\
+\midrule
+Video  & $\sim$3\,500 & 89.7\,\% & 1.0$\times$ (ref) \\
+Audio  &   $\sim$200  &  6.2\,\% & \textbf{1.16}$\times$ \\
+Text   &    $\sim$30  &  4.1\,\% & \textbf{5.1}$\times$ \\
+\bottomrule
+\end{tabular}}
+\end{block}
+
+\end{column}
+
+\begin{column}{0.42\textwidth}
+
+\begin{beamercolorbox}[sep=5pt,rounded=true,colsep*=0pt]{block body}
+{\footnotesize
+\textbf{The key fact.} Video has 17$\times$ more tokens than audio,
+so its bulk saliency dominates. But \emph{per token}, audio and
+text receive more attention than video. The model is not video-biased
+by preference --- it is outvoted by token count alone.}
+\end{beamercolorbox}
+
+\vspace{6pt}
+
+\begin{block}{Why this matters for the bottleneck}
+{\footnotesize
+The VIB compresses video tokens. Even modest compression (2.6$\times$,
+$\mathrm{KL}_v: 12229\!\to\!4776$) brings the effective token budget
+closer to audio. This should let audio tokens ``speak louder'' without
+any explicit reweighting.}
+\end{block}
+
+\end{column}
+\end{columns}
+
+\end{frame}
+
+% =====================================================================
+\begin{frame}{The VIB concentrates attention on the sound source}
+
+\begin{columns}[T]
+\begin{column}{0.50\textwidth}
+
+\begin{block}{Gradient saliency maps: without vs.\ with VIB}
+{\footnotesize
+Same checkpoint, same 6 clips. Left column: bottleneck disabled
+(video tokens passed through). Right column: bottleneck enabled.
+Maps show which video-token positions drive the final answer token.}
+\end{block}
+
+{\footnotesize
+\begin{tabular}{l r r}
+\toprule
+\textbf{Metric} & \textbf{No IB} & \textbf{With IB} \\
+\midrule
+Spatial entropy     & 0.78 & \textbf{0.69} ($\downarrow$11\,\%) \\
+Top-5\% mass        & 0.53 & \textbf{0.74} ($\uparrow$40\,\%) \\
+\bottomrule
+\end{tabular}}
+
+\vspace{4pt}
+{\footnotesize
+\textbf{Spatial entropy}: $H=-\sum_i \bar s_i \log \bar s_i$ of the
+normalised saliency map (lower = more localised).\\
+\textbf{Top-5\% mass}: fraction of total saliency in the top 5\%
+of positions (higher = more concentrated).}
+
+\end{column}
+
+\begin{column}{0.47\textwidth}
+
+\begin{beamercolorbox}[sep=5pt,rounded=true,colsep*=0pt]{block body}
+{\footnotesize
+Without the bottleneck, saliency scatters over backgrounds and
+irrelevant regions. With the bottleneck, it concentrates on the
+sound source (the singer's face and microphone). The VIB acts as a
+spatial filter that discards redundant background detail.}
+\end{beamercolorbox}
+
+\vspace{6pt}
+
+\begin{block}{Connection to fail-safety}
+{\footnotesize
+Concentrated saliency is a necessary (not sufficient) condition for
+fail-safety: if the model grounds its answer on the sound source,
+zeroing that source should reliably collapse confidence. The DPO
+abstention results support this: the model correctly abstains on
+\texttt{vid\_zero} and \texttt{vid\_mean} --- exactly the conditions
+where the grounding region is removed.}
+\end{block}
+
+\end{column}
+\end{columns}
+
+\end{frame}
+
+% =====================================================================
+\begin{frame}{Audio attention: which segments drive the answer}
+
+\begin{columns}[T]
+\begin{column}{0.55\textwidth}
+
+\begin{block}{Method}
+{\footnotesize
+Same gradient saliency pass, restricted to audio token positions.
+We map each audio token back to its time offset in the clip and
+overlay the saliency curve on the waveform. Top-$k$ attended
+time windows are marked.}
+\end{block}
+
+\begin{block}{Observations (30 AVHBench clips)}
+{\footnotesize
+\begin{itemize}\setlength\itemsep{2pt}
+  \item The peak attended audio segment corresponds to the onset of the
+        relevant sound event in $\sim$70\,\% of clips.
+  \item Audio saliency is bursty: a 1--2\,s window typically accounts
+        for $>$50\,\% of total audio saliency.
+  \item The VIB model and the vanilla model show similar audio saliency
+        patterns --- confirming that the VIB acts on video, not audio.
+\end{itemize}}
+\end{block}
+
+\end{column}
+
+\begin{column}{0.42\textwidth}
+
+\begin{block}{What this rules out}
+{\footnotesize
+If audio saliency were uniform, the model would be integrating
+the whole waveform regardless of content. The bursty pattern shows
+the model has learned to attend to \emph{events} in the audio
+stream, not just the presence/absence of sound.}
+\end{block}
+
+\begin{block}{Implication for the IB story}
+{\footnotesize
+The bottleneck compresses video, leaving audio untouched. The
+audio saliency patterns are unchanged by the VIB, which is
+consistent with the per-token attention analysis: audio tokens
+were always attended to more carefully --- the VIB only removes
+the numerical dominance of video bulk.}
+\end{block}
+
+\end{column}
+\end{columns}
+
+\end{frame}
+
+% =====================================================================
+\section{Open issues}
+
+\begin{frame}{Two open issues from this week}
+
+\begin{columns}[T]
+\begin{column}{0.50\textwidth}
+
+\begin{block}{1.\ \texttt{vid\_noise} generalisation gap}
+{\footnotesize
+DPO abstains correctly on trained corruptions but not on
+\texttt{vid\_noise} (white noise, held-out). Two possible fixes:
+\begin{enumerate}\setlength\itemsep{2pt}
+  \item \textbf{Add noise to the training set.} Simple, but we'd
+        need to enumerate all ``confusable'' corruptions.
+  \item \textbf{Train on the VIB's $\sigma$ signal.} When the
+        bottleneck sees high-entropy input, $\sigma$ is high.
+        If the model learns ``$\sigma_{\max}\!\uparrow\Rightarrow$
+        abstain,'' it generalises across any corruption that raises
+        the VIB's posterior uncertainty --- including noise.
+  \end{enumerate}}
+\end{block}
+
+\end{column}
+
+\begin{column}{0.47\textwidth}
+
+\begin{block}{2.\ Risk metric is degenerate (evaluation bug)}
+{\footnotesize
+All conditions report risk\,=\,1.0 (zero correct answers when the
+model does answer). Root cause: the answer-extraction regex expects
+``yes''/``no'' directly, but the DPO model now sometimes says
+``yes, \ldots'' or ``no, because\ldots''. The coverage numbers are
+valid (they count abstention tokens exactly); the risk numbers need
+a fuzzy match fix before they can be reported.}
+\end{block}
+
+\begin{block}{Fix plan}
+{\footnotesize
+Update \texttt{eval/risk\_coverage.py}: first token after the
+answer marker determines yes/no/cant; discard the rest of the
+generation when computing accuracy. Re-run eval on existing
+checkpoints (no re-training needed).}
+\end{block}
+
+\end{column}
+\end{columns}
+
+\end{frame}
+
+% =====================================================================
+\section{Next steps}
+
+\begin{frame}{Next steps}
+
+\begin{block}{1.\ Fix the risk metric and re-read the 6-way table}
+  Patch the answer extractor (first-token rule). Re-run evaluation on
+  all saved checkpoints. The coverage table already shows DPO works;
+  the risk table will tell us whether DPO preserved task accuracy.
+  This is the primary deliverable for next week.
+\end{block}
+
+\begin{block}{2.\ Extend DPO to \texttt{vid\_noise}}
+  Add Gaussian noise corruptions to the preference-pair mining step.
+  Re-run DPO. Target: coverage on \texttt{vid\_noise} drops from
+  94\,\% to $<$20\,\% while clean coverage stays $>$95\,\%.
+\end{block}
+
+\begin{block}{3.\ Test the $\sigma$-signal hypothesis}
+  Log $\max_j\sigma_j$ from the VIB on the same 150-item eval set
+  across all conditions. If $\sigma$ rises reliably on corrupted
+  inputs, it provides a corruption-agnostic abstention feature ---
+  and the strongest argument for keeping the bottleneck.
+\end{block}
+
+\begin{block}{4.\ Transfer the winning model to AVHBench hallucination task}
+  Once the risk metric is fixed and DPO generalises to noise,
+  re-run the Video-driven Audio Hallucination subset. Target: erase
+  the $-8.3$\,pp regression from the last report.
+\end{block}
+
+\end{frame}
+
+\end{document}
