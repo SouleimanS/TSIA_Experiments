@@ -1,0 +1,44 @@
+#!/bin/bash
+#PBS -N balanced_train
+#PBS -P gae50891
+#PBS -q rt_HF
+#PBS -l select=1
+#PBS -l walltime=06:00:00
+#PBS -j oe
+#PBS -o balanced_train.qsub.log
+
+# AVModelBalanced: audio token-count equalization + direction-preservation loss.
+# Fixes the structural audio attention suppression diagnosed by token_analysis.
+
+set -euo pipefail
+cd "$PBS_O_WORKDIR"
+source /home/aab11336im/anaconda3/etc/profile.d/conda.sh
+conda activate av_ib
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+echo "=== Node: $(hostname)  Date: $(date) ==="
+nvidia-smi -L
+
+ANN_TRAIN="$HOME/SOULEIMAN_repo/datasets/AVQA/train_qa.json"
+VIDEO_ROOT="$HOME/SOULEIMAN_repo/datasets/AVQA/videos"
+[ -f "$ANN_TRAIN" ] || { echo "ERROR: $ANN_TRAIN missing" >&2; exit 1; }
+
+mkdir -p runs/balanced
+exec > >(tee -a "$PBS_O_WORKDIR/runs/balanced/balanced_train_out.txt") 2>&1
+
+export CUDA_VISIBLE_DEVICES=0
+python -u -m av_ib.balanced.train \
+    --dataset avqa \
+    --ann-path "$ANN_TRAIN" --video-root "$VIDEO_ROOT" \
+    --variant b_topk_nofusion \
+    --num-steps 2000 --lr 1e-4 \
+    --beta-v 7e-6 --beta-a 7e-6 \
+    --aux-weight 0.1 \
+    --dir-weight 0.1 \
+    --audio-balance \
+    --log-path runs/balanced/balanced.jsonl \
+    --ckpt-path runs/balanced/balanced_final.pt \
+    --save-every 500 --print-every 50
+
+echo "=== Done $(date) ==="
