@@ -307,16 +307,6 @@ def main():
     plt.savefig(fname, dpi=150)
     plt.close()
     print(f"Saved {fname}", flush=True)
-
-    # also dump metrics as a sidecar for aggregation
-    import json
-    (out_dir / f"{Path(args.video).stem}_ib_metrics.json").write_text(json.dumps({
-        "video": Path(args.video).stem,
-        "without_ib": m0,
-        "with_ib": m1,
-        "delta_norm_entropy": m1["norm_entropy"] - m0["norm_entropy"],
-        "delta_top5pct_mass": m1["top5pct_mass"] - m0["top5pct_mass"],
-    }, indent=2))
     print("Done.", flush=True)
 
 
