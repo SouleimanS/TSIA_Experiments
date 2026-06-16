@@ -1,0 +1,8 @@
+# Experiment outputs (checkpoints, metrics, plots) - regenerable from code
+outputs/
+*.pt
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

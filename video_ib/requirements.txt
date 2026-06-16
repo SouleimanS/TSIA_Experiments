@@ -1,0 +1,10 @@
+# Core (required)
+torch>=2.0
+numpy>=1.24
+
+# Plots in sweep.py (optional but recommended; sweep degrades to CSV/JSON without it)
+matplotlib>=3.6
+
+# Only needed if you swap the synthetic dataset for real video files
+# imageio>=2.31
+# imageio-ffmpeg>=0.4
